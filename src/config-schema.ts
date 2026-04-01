@@ -100,24 +100,6 @@ export const configSchema = z.object({
     }),
   }),
 
-  router: z.object({
-    complexity_signals: z.record(z.number()).default({
-      refactor: 3,
-      debug: 3,
-      investigate: 2,
-      architecture: 3,
-      "cross-repo": 4,
-      migration: 2,
-      security: 2,
-      crud: -2,
-      boilerplate: -3,
-      test: -1,
-      rename: -2,
-      "add field": -2,
-      "create endpoint": -1,
-    }),
-  }),
-
   validation: z.object({
     max_retries: z.number().int().default(2),
     typescript: z.array(validationStepSchema).default([

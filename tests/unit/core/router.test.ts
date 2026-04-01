@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { routeTask, computeKeywordScore } from "../../../src/core/router.js";
+import { routeTask } from "../../../src/core/router.js";
 import type { ClawEngineConfig } from "../../../src/config-schema.js";
 
 const testConfig: ClawEngineConfig = {
@@ -56,9 +56,6 @@ const testConfig: ClawEngineConfig = {
       force_qwen_percent: 0.85,
     },
   },
-  router: {
-    complexity_signals: { refactor: 3, debug: 3, crud: -2, "add field": -2 },
-  },
   validation: { max_retries: 2, typescript: [], python: [] },
   mcp: { servers: {} },
   notifications: { telegram: { enabled: true, via_openclaw: true } },
@@ -90,6 +87,20 @@ describe("routeTask", () => {
     expect(result.mode).toBe("engine");
   });
 
+  it("medium complexity → alibaba engine mode", () => {
+    const result = routeTask(
+      {
+        complexity: "medium",
+        description: "add a feature with some logic",
+        fallbackChainPosition: 0,
+        claudeBudgetPercent: 0,
+      },
+      testConfig,
+    );
+    expect(result.provider).toBe("alibaba");
+    expect(result.mode).toBe("engine");
+  });
+
   it("complex complexity → anthropic delegate mode", () => {
     const result = routeTask(
       {
@@ -102,32 +113,6 @@ describe("routeTask", () => {
     );
     expect(result.provider).toBe("anthropic");
     expect(result.mode).toBe("delegate");
-  });
-
-  it("medium + refactor keyword → delegate (score +3 > 0)", () => {
-    const result = routeTask(
-      {
-        complexity: "medium",
-        description: "refactor the user module",
-        fallbackChainPosition: 0,
-        claudeBudgetPercent: 0,
-      },
-      testConfig,
-    );
-    expect(result.mode).toBe("delegate");
-  });
-
-  it("medium + crud keyword → engine (score -2 <= 0)", () => {
-    const result = routeTask(
-      {
-        complexity: "medium",
-        description: "crud operations for posts",
-        fallbackChainPosition: 0,
-        claudeBudgetPercent: 0,
-      },
-      testConfig,
-    );
-    expect(result.mode).toBe("engine");
   });
 
   it("fallbackChainPosition: 1 → delegates to chain[1]", () => {
@@ -144,7 +129,7 @@ describe("routeTask", () => {
     expect(result.provider).toBe("anthropic");
   });
 
-  it("claudeBudgetPercent: 90 (>= 85%) → forces alibaba", () => {
+  it("claudeBudgetPercent: 90 (>= 85%) → forces alibaba even for complex tasks", () => {
     const result = routeTask(
       {
         complexity: "complex",
@@ -156,15 +141,5 @@ describe("routeTask", () => {
     );
     expect(result.provider).toBe("alibaba");
     expect(result.reason).toContain("claude budget exceeded");
-  });
-});
-
-describe("computeKeywordScore", () => {
-  it("sums matching keyword weights", () => {
-    const signals = { refactor: 3, crud: -2 };
-    expect(computeKeywordScore("refactor the service", signals)).toBe(3);
-    expect(computeKeywordScore("crud operations", signals)).toBe(-2);
-    expect(computeKeywordScore("refactor crud", signals)).toBe(1);
-    expect(computeKeywordScore("nothing matches", signals)).toBe(0);
   });
 });

@@ -12,6 +12,7 @@ import {
   updateTaskStatus,
 } from "../../storage/repositories/tasks-repo.js";
 import { createAlibabaAdapter } from "../../harness/model-adapters/alibaba-adapter.js";
+import { classifyTask } from "../../core/classifier.js";
 import { withRetry } from "../../harness/model-adapters/with-retry.js";
 import { createQueryEnginePort } from "../../harness/query-engine-port.js";
 import {
@@ -59,9 +60,25 @@ export function registerRunCommand(program: import("commander").Command) {
         }
 
         const config = loadConfig();
+
+        // LLM-based classification — fast Qwen call (~50 tokens, 8s timeout).
+        // Falls back to "medium" on error so it never blocks execution.
+        let complexity: "simple" | "medium" | "complex" = "medium";
+        if (!opts.delegate) {
+          const apiKey =
+            process.env[config.providers.alibaba.api_key_env] ?? "";
+          if (apiKey) {
+            complexity = await classifyTask(prompt, {
+              apiKey,
+              baseUrl: config.providers.alibaba.base_url,
+              model: config.models.default,
+            });
+          }
+        }
+
         const route = routeTask(
           {
-            complexity: "medium",
+            complexity,
             description: prompt,
             fallbackChainPosition: 0,
             claudeBudgetPercent: 0,
@@ -71,6 +88,7 @@ export function registerRunCommand(program: import("commander").Command) {
 
         const mode = opts.delegate ? "delegate" : route.mode;
 
+        console.log(`classify → ${complexity}`);
         console.log(
           `routing → ${mode} mode (${opts.delegate ? "forced" : route.reason})`,
         );
@@ -101,7 +119,7 @@ export function registerRunCommand(program: import("commander").Command) {
             repo: basename(repoPath),
             branch,
             description: prompt,
-            complexity: "medium",
+            complexity,
             model:
               mode === "delegate"
                 ? (opts.model ?? "claude")
@@ -250,12 +268,14 @@ export function registerRunCommand(program: import("commander").Command) {
           const manualResumeId =
             typeof opts.resume === "string" ? opts.resume : null;
 
-          try {
-            const stream = manualResumeId
-              ? port.resume(manualResumeId)
-              : port.run(prompt);
-
-            for await (const event of stream) {
+          // Displays a single event to stdout/stderr. Returns the session_end
+          // reason if the event is a session_end, otherwise null.
+          async function* streamEvents(
+            source: AsyncGenerator<
+              import("../../harness/events.js").HarnessEvent
+            >,
+          ): AsyncGenerator<string | null> {
+            for await (const event of source) {
               if (event.type === "text_delta") {
                 process.stdout.write(event.text);
               } else if (event.type === "tool_use") {
@@ -275,62 +295,52 @@ export function registerRunCommand(program: import("commander").Command) {
                 process.stderr.write(
                   `\n[retry] attempt ${event.attempt}/${event.maxAttempts} — ${event.error} (wait ${event.delayMs}ms)\n`,
                 );
+              } else if (event.type === "session_resume") {
+                process.stderr.write(
+                  `\n⟳ Resuming session (pass ${event.resumeCount}/${MAX_RESUMES})\n`,
+                );
               } else if (event.type === "session_end") {
-                endReason = event.reason;
                 process.stderr.write("\n");
+                yield event.reason;
+                return;
+              }
+            }
+          }
 
-                if (event.reason === "completed") {
+          try {
+            const initialStream = manualResumeId
+              ? port.resume(manualResumeId)
+              : port.run(prompt);
+
+            let currentStream = initialStream;
+
+            // Auto-resume loop: each checkpoint triggers a new resume pass
+            // until completed, error, or MAX_RESUMES exhausted.
+            while (true) {
+              let checkpointed = false;
+
+              for await (const reason of streamEvents(currentStream)) {
+                endReason = reason ?? endReason;
+
+                if (reason === "completed") {
                   console.log("\n✅ done");
-                } else if (event.reason === "checkpoint") {
+                } else if (reason === "checkpoint") {
                   if (autoResume && resumeCount < MAX_RESUMES) {
                     resumeCount++;
                     console.log(
                       `\n⟳ Checkpoint reached. Compacting and resuming... [pass ${resumeCount}/${MAX_RESUMES}]`,
                     );
-                    for await (const resumeEvent of port.resume(sessionId)) {
-                      if (resumeEvent.type === "text_delta") {
-                        process.stdout.write(resumeEvent.text);
-                      } else if (resumeEvent.type === "tool_use") {
-                        const input = JSON.stringify(resumeEvent.input ?? {});
-                        const preview =
-                          input.length > 60
-                            ? input.slice(0, 57) + "..."
-                            : input;
-                        process.stderr.write(
-                          `\n[tool] ${resumeEvent.name}(${preview})\n`,
-                        );
-                      } else if (resumeEvent.type === "token_update") {
-                        process.stderr.write(
-                          `\r[tokens] ${resumeEvent.used.toLocaleString()} / ${resumeEvent.budget.toLocaleString()} (${resumeEvent.percent}%)   `,
-                        );
-                      } else if (resumeEvent.type === "compaction") {
-                        process.stderr.write(
-                          `\n[compaction] ${resumeEvent.messagesBefore} → ${resumeEvent.messagesAfter} messages\n`,
-                        );
-                      } else if (resumeEvent.type === "api_retry") {
-                        process.stderr.write(
-                          `\n[retry] attempt ${resumeEvent.attempt}/${resumeEvent.maxAttempts} — ${resumeEvent.error} (wait ${resumeEvent.delayMs}ms)\n`,
-                        );
-                      } else if (resumeEvent.type === "session_end") {
-                        endReason = resumeEvent.reason;
-                        if (resumeEvent.reason === "completed") {
-                          console.log("\n✅ done");
-                        } else if (resumeEvent.reason === "checkpoint") {
-                          console.log(
-                            "\n📍 checkpoint saved — max resumes reached",
-                          );
-                        } else {
-                          console.log(`\n⚠️  ended: ${resumeEvent.reason}`);
-                        }
-                      }
-                    }
+                    checkpointed = true;
                   } else {
                     console.log("\n📍 checkpoint saved");
                   }
                 } else {
-                  console.log(`\n⚠️  ended: ${event.reason}`);
+                  console.log(`\n⚠️  ended: ${reason}`);
                 }
               }
+
+              if (!checkpointed) break;
+              currentStream = port.resume(sessionId);
             }
           } catch (err) {
             endReason = "failed";
