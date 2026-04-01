@@ -1,4 +1,7 @@
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export type AlertType =
   | "budget_high"
@@ -38,8 +41,7 @@ export async function sendAlert(opts: AlertOptions): Promise<void> {
   const message = parts.join(" | ");
 
   try {
-    execSync(`openclaw message send "${message.replace(/"/g, '\\"')}"`, {
-      stdio: "pipe",
+    await execFileAsync("openclaw", ["message", "send", message], {
       timeout: 5_000,
     });
   } catch {

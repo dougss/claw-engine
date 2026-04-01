@@ -61,6 +61,8 @@ export async function createScheduler(
       ...(limiter
         ? {
             limiter: {
+              max: limiter.max,
+              duration: limiter.duration,
               groupKey: "provider",
             },
           }

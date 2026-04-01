@@ -1,7 +1,10 @@
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { statfs } from "node:fs/promises";
 import net from "node:net";
 import { loadConfig } from "../../config.js";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export interface DoctorCheck {
   name: string;
@@ -85,7 +88,8 @@ export function createDefaultCheckers() {
       try {
         const config = loadConfig();
         const binary = config.providers.anthropic.binary;
-        const path = execSync(`which ${binary}`, { encoding: "utf-8" }).trim();
+        const { stdout } = await execFileAsync("which", [binary]);
+        const path = stdout.trim();
         return {
           name: "claude binary",
           passed: true,

@@ -1,8 +1,13 @@
 import type { Message, ToolDefinition, ToolResult } from "../types.js";
 import type { HarnessEvent } from "./events.js";
 import type { ModelAdapter } from "./model-adapters/adapter-types.js";
-import { getTool } from "./tools/tool-registry.js";
+import { getTool, isMcpTool } from "./tools/tool-registry.js";
 import type { ToolContext, ToolHandler } from "./tools/tool-types.js";
+import {
+  DEFAULT_PERMISSION_RULES,
+  evaluatePermission,
+  type PermissionRule,
+} from "./permissions.js";
 
 const SUMMARY_PROMPT =
   "You are approaching the context limit. Please summarize what you have accomplished so far and what still needs to be done, so work can resume seamlessly in a new session. Be concise.";
@@ -19,6 +24,8 @@ export interface RunAgentLoopInput {
   sessionId?: string;
   /** Percent of context window at which a checkpoint is triggered. Default: 85. */
   checkpointThresholdPercent?: number;
+  permissionRules?: PermissionRule[];
+  mcpCallTool?: (name: string, input: unknown) => Promise<ToolResult>;
 }
 
 function createToolMessage({
@@ -76,6 +83,8 @@ export async function* runAgentLoop({
   toolHandlers,
   sessionId = "test-session",
   checkpointThresholdPercent = 85,
+  permissionRules = DEFAULT_PERMISSION_RULES,
+  mcpCallTool,
 }: RunAgentLoopInput): AsyncGenerator<HarnessEvent> {
   const messages: Message[] = [
     { role: "system", content: systemPrompt },
@@ -104,7 +113,58 @@ export async function* runAgentLoop({
 
       const handler = getToolHandler({ name: event.name, toolHandlers });
 
+      const permission = evaluatePermission({
+        tool: event.name,
+        input: event.input,
+        workspacePath,
+        rules: permissionRules,
+      });
+
+      if (permission.action !== "allow") {
+        yield {
+          type: "permission_denied",
+          tool: event.name,
+          reason: permission.reason,
+        };
+
+        const toolResultEvent: HarnessEvent = {
+          type: "tool_result",
+          id: event.id,
+          output: `Permission denied for tool "${event.name}": ${permission.reason}`,
+          isError: true,
+        };
+
+        yield toolResultEvent;
+        messages.push(
+          createToolMessage({
+            toolUseId: event.id,
+            toolName: event.name,
+            output: toolResultEvent.output,
+          }),
+        );
+        continue;
+      }
+
       if (!handler) {
+        if (mcpCallTool && isMcpTool(event.name)) {
+          const result = await mcpCallTool(event.name, event.input);
+          const toolResultEvent: HarnessEvent = {
+            type: "tool_result",
+            id: event.id,
+            output: result.output,
+            isError: result.isError,
+          };
+          yield toolResultEvent;
+          messages.push(
+            createToolMessage({
+              toolUseId: event.id,
+              toolName: event.name,
+              output: toolResultEvent.output,
+            }),
+          );
+          continue;
+        }
+
         const toolResultEvent: HarnessEvent = {
           type: "tool_result",
           id: event.id,

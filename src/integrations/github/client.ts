@@ -1,4 +1,7 @@
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export async function createPullRequest({
   repo,
@@ -11,13 +14,21 @@ export async function createPullRequest({
   title: string;
   body: string;
 }): Promise<{ url: string; number: number }> {
-  const safeTitle = title.replace(/"/g, '\\"');
-  const safeBody = body.replace(/"/g, '\\"');
-  const output = execSync(
-    `gh pr create --repo ${repo} --head ${branch} --title "${safeTitle}" --body "${safeBody}" --json url,number`,
-    { encoding: "utf-8" },
-  );
-  return JSON.parse(output) as { url: string; number: number };
+  const { stdout } = await execFileAsync("gh", [
+    "pr",
+    "create",
+    "--repo",
+    repo,
+    "--head",
+    branch,
+    "--title",
+    title,
+    "--body",
+    body,
+    "--json",
+    "url,number",
+  ]);
+  return JSON.parse(stdout) as { url: string; number: number };
 }
 
 export async function createBranch({
@@ -29,7 +40,12 @@ export async function createBranch({
   branch: string;
   base?: string;
 }): Promise<void> {
-  execSync(`git -C ${repoPath} checkout -b ${branch} origin/${base}`, {
-    stdio: "pipe",
-  });
+  await execFileAsync("git", [
+    "-C",
+    repoPath,
+    "checkout",
+    "-b",
+    branch,
+    `origin/${base}`,
+  ]);
 }

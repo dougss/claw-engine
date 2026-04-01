@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createMockAdapter } from "../../../src/harness/model-adapters/mock-adapter.js";
 import { runAgentLoop } from "../../../src/harness/agent-loop.js";
 import type { ToolHandler } from "../../../src/harness/tools/tool-types.js";
+import { PERMISSION_ACTION } from "../../../src/harness/permissions.js";
 
 describe("runAgentLoop", () => {
   it("completes when model returns only text_delta", async () => {
@@ -66,6 +67,7 @@ describe("runAgentLoop", () => {
       tokenBudget: 1000,
       workspacePath: "/tmp",
       toolHandlers,
+      permissionRules: [{ tool: "echo", action: PERMISSION_ACTION.allow }],
     })) {
       events.push(e);
     }
@@ -119,6 +121,7 @@ describe("runAgentLoop", () => {
       tokenBudget: 1000,
       workspacePath: "/tmp",
       toolHandlers,
+      permissionRules: [{ tool: "echo", action: PERMISSION_ACTION.allow }],
     })) {
       events.push(e);
     }
