@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:dashboard",
+    "build:dashboard": "cd src/dashboard && npm run build",
     "dev": "tsx watch src/server.ts",
     "test": "vitest run",
     "test:watch": "vitest",
