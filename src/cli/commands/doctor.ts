@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { statfs } from "node:fs/promises";
 import net from "node:net";
 import { loadConfig } from "../../config.js";
 
@@ -98,6 +99,21 @@ export function createDefaultCheckers() {
         };
       }
     },
+
+    checkDisk: async (): Promise<DoctorCheck> => {
+      try {
+        const stats = await statfs("/");
+        const freeGb = (stats.bavail * stats.bsize) / 1024 ** 3;
+        const minGb = 20;
+        return {
+          name: "disk space",
+          passed: freeGb >= minGb,
+          message: `${freeGb.toFixed(1)} GB free (minimum ${minGb} GB)`,
+        };
+      } catch (err) {
+        return { name: "disk space", passed: false, message: String(err) };
+      }
+    },
   };
 }
 
@@ -106,13 +122,16 @@ export async function runDoctorChecks(checkers: {
   checkDb: CheckFn;
   checkRedis: CheckFn;
   checkClaude: CheckFn;
+  checkDisk?: CheckFn;
 }): Promise<DoctorCheck[]> {
-  return Promise.all([
+  const checks = [
     checkers.checkConfig(),
     checkers.checkDb(),
     checkers.checkRedis(),
     checkers.checkClaude(),
-  ]);
+  ];
+  if (checkers.checkDisk) checks.push(checkers.checkDisk());
+  return Promise.all(checks);
 }
 
 export function registerDoctorCommand(program: import("commander").Command) {
