@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { tasks } from "../schema/index.js";
 import type { getDb } from "../db.js";
 
@@ -48,4 +48,35 @@ export async function updateTaskStatus(db: Db, id: string, status: string) {
     .where(eq(tasks.id, id))
     .returning();
   return result;
+}
+
+export async function getTaskCheckpointData(
+  db: Db,
+  taskId: string,
+): Promise<Record<string, unknown> | null> {
+  const [result] = await db
+    .select({ checkpointData: tasks.checkpointData })
+    .from(tasks)
+    .where(eq(tasks.id, taskId));
+  if (!result) return null;
+  return (result.checkpointData as Record<string, unknown> | null) ?? null;
+}
+
+export async function setTaskCheckpointData(
+  db: Db,
+  taskId: string,
+  data: Record<string, unknown> | null,
+): Promise<void> {
+  await db
+    .update(tasks)
+    .set({ checkpointData: data })
+    .where(eq(tasks.id, taskId));
+}
+
+export async function listTasksWithCheckpoint(db: Db): Promise<string[]> {
+  const results = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(sql`${tasks.checkpointData} IS NOT NULL`);
+  return results.map((r) => r.id);
 }

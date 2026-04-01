@@ -52,6 +52,7 @@ export function createMemorySessionStore(): SessionStore {
 export function createPostgresSessionStore({
   getTaskCheckpointData,
   setTaskCheckpointData,
+  listTasksWithCheckpoint,
 }: {
   getTaskCheckpointData: (
     taskId: string,
@@ -60,6 +61,7 @@ export function createPostgresSessionStore({
     taskId: string,
     data: Record<string, unknown> | null,
   ) => Promise<void>;
+  listTasksWithCheckpoint?: () => Promise<string[]>;
 }): SessionStore {
   return {
     async save(state) {
@@ -85,7 +87,8 @@ export function createPostgresSessionStore({
     },
 
     async list() {
-      return [];
+      if (!listTasksWithCheckpoint) return [];
+      return listTasksWithCheckpoint();
     },
   };
 }

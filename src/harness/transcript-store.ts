@@ -11,6 +11,10 @@ export interface SerializedTranscript {
   isFlushed: boolean;
 }
 
+export interface MicrocompactResult {
+  clearedCount: number;
+}
+
 export interface TranscriptStore {
   compactionCount: number;
   isFlushed: boolean;
@@ -30,6 +34,7 @@ export interface TranscriptStore {
     config: QueryEngineConfig;
     adapter: ModelAdapter;
   }): Promise<void>;
+  microcompact(threshold?: number): MicrocompactResult;
 
   getMessages(): Message[];
   getMutableMessages(): Message[];
@@ -142,6 +147,37 @@ export function createTranscriptStore({
     isFlushed = true;
   }
 
+  function microcompact(threshold = 20): MicrocompactResult {
+    if (messages.length <= threshold) return { clearedCount: 0 };
+
+    const STALE_CONTENT =
+      "[Tool result cleared — stale content removed to save tokens]";
+    const RECENT_TOOL_RESULTS_TO_KEEP = 5;
+
+    const toolResultIndices = messages
+      .map((m, i) => (m.role === "tool" ? i : -1))
+      .filter((i) => i !== -1);
+
+    if (toolResultIndices.length <= RECENT_TOOL_RESULTS_TO_KEEP) {
+      return { clearedCount: 0 };
+    }
+
+    const indicesToClear = toolResultIndices.slice(
+      0,
+      toolResultIndices.length - RECENT_TOOL_RESULTS_TO_KEEP,
+    );
+
+    let clearedCount = 0;
+    for (const idx of indicesToClear) {
+      if (messages[idx].content !== STALE_CONTENT) {
+        messages[idx] = { ...messages[idx], content: STALE_CONTENT };
+        clearedCount++;
+      }
+    }
+
+    return { clearedCount };
+  }
+
   function getMessages(): Message[] {
     return [...messages];
   }
@@ -177,6 +213,7 @@ export function createTranscriptStore({
     addToolResult,
     shouldCompact,
     compact,
+    microcompact,
     getMessages,
     getMutableMessages,
     getRecentMessages,
