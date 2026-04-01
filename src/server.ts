@@ -1,6 +1,10 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import fastifyStatic from "@fastify/static";
 import { Redis } from "ioredis";
+import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { getDb } from "./storage/db.js";
 import { registerWorkItemRoutes } from "./api/routes/work-items.js";
@@ -55,6 +59,26 @@ export async function createServer(configPath?: string) {
     },
     { prefix: "/api" },
   );
+
+  // Serve React dashboard static files in production
+  const dashboardDir = join(
+    fileURLToPath(import.meta.url),
+    "../../dist/dashboard",
+  );
+  if (existsSync(dashboardDir)) {
+    await app.register(fastifyStatic, {
+      root: dashboardDir,
+      prefix: "/",
+      // SPA fallback: serve index.html for unknown routes (except /api)
+      wildcard: false,
+    });
+    app.setNotFoundHandler(async (_req, reply) => {
+      if (!_req.url.startsWith("/api")) {
+        return reply.sendFile("index.html");
+      }
+      reply.status(404).send({ error: "not found" });
+    });
+  }
 
   return { app, config, redis, db };
 }
