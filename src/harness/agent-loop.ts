@@ -4,6 +4,9 @@ import type { ModelAdapter } from "./model-adapters/adapter-types.js";
 import { getTool } from "./tools/tool-registry.js";
 import type { ToolContext, ToolHandler } from "./tools/tool-types.js";
 
+const SUMMARY_PROMPT =
+  "You are approaching the context limit. Please summarize what you have accomplished so far and what still needs to be done, so work can resume seamlessly in a new session. Be concise.";
+
 export interface RunAgentLoopInput {
   adapter: ModelAdapter;
   systemPrompt: string;
@@ -14,6 +17,8 @@ export interface RunAgentLoopInput {
   workspacePath: string;
   toolHandlers?: Map<string, ToolHandler>;
   sessionId?: string;
+  /** Percent of context window at which a checkpoint is triggered. Default: 85. */
+  checkpointThresholdPercent?: number;
 }
 
 function createToolMessage({
@@ -70,6 +75,7 @@ export async function* runAgentLoop({
   workspacePath,
   toolHandlers,
   sessionId = "test-session",
+  checkpointThresholdPercent = 85,
 }: RunAgentLoopInput): AsyncGenerator<HarnessEvent> {
   const messages: Message[] = [
     { role: "system", content: systemPrompt },
@@ -79,12 +85,17 @@ export async function* runAgentLoop({
   for (let i = 0; i < maxIterations; i++) {
     let sawToolUse = false;
     let assistantText = "";
+    let highestPercent = 0;
 
     for await (const event of adapter.chat(messages, tools)) {
       yield event;
 
       if (event.type === "text_delta") {
         assistantText += event.text;
+      }
+
+      if (event.type === "token_update") {
+        if (event.percent > highestPercent) highestPercent = event.percent;
       }
 
       if (event.type !== "tool_use") continue;
@@ -137,6 +148,18 @@ export async function* runAgentLoop({
 
     if (assistantText) {
       messages.push(createAssistantMessage(assistantText));
+    }
+
+    // Check checkpoint threshold before deciding to continue
+    if (highestPercent >= checkpointThresholdPercent) {
+      // Inject a summary request so the session can be resumed meaningfully
+      messages.push({ role: "user", content: SUMMARY_PROMPT });
+      for await (const event of adapter.chat(messages, [])) {
+        yield event;
+      }
+      yield { type: "checkpoint", reason: "token_limit" };
+      yield { type: "session_end", reason: "checkpoint" };
+      return;
     }
 
     if (!sawToolUse) {
