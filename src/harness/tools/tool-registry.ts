@@ -1,5 +1,7 @@
 import type { ToolDefinition } from "../../types.js";
 import type { ToolHandler } from "./tool-types.js";
+import { webFetchTool } from "./builtins/web-fetch.js";
+import { webSearchTool } from "./builtins/web-search.js";
 
 const toolsByName = new Map<string, ToolHandler>();
 const mcpToolsByName = new Map<string, ToolDefinition>();
@@ -36,3 +38,20 @@ export function registerMcpTools(tools: ToolDefinition[]): void {
     mcpToolsByName.set(tool.name, tool);
   }
 }
+
+export function getToolsByNames(names: string[]): ToolHandler[] {
+  const result: ToolHandler[] = [];
+  for (const name of names) {
+    const handler = toolsByName.get(name);
+    if (handler) result.push(handler);
+  }
+  return result;
+}
+
+export function clearRegistry(): void {
+  toolsByName.clear();
+  mcpToolsByName.clear();
+}
+
+registerTool(webFetchTool);
+registerTool(webSearchTool);

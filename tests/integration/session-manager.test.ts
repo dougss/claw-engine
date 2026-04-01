@@ -106,4 +106,36 @@ describe("session-manager + worktree provisioning", () => {
       await rm(baseDir, { recursive: true, force: true });
     }
   });
+
+  it("uses QueryEnginePort for session orchestration", async () => {
+    const baseDir = join(
+      tmpdir(),
+      `claw-engine-qep-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const repoPath = join(baseDir, "repo");
+
+    await mkdir(baseDir, { recursive: true });
+    await initCommittedRepo(repoPath);
+
+    try {
+      const adapter = createMockAdapter({
+        name: "mock-qep",
+        responses: [[{ type: "text_delta", text: "completed via QEP" }]],
+      });
+
+      const result = await runSingleSession({
+        adapter,
+        systemPrompt: "You are a test runner.",
+        userPrompt: "Say hello.",
+        tools: [],
+        workspacePath: repoPath,
+        maxIterations: 3,
+      });
+
+      expect(result.endReason).toBe("completed");
+      expect(result.events.some((e) => e.type === "session_end")).toBe(true);
+    } finally {
+      await rm(baseDir, { recursive: true, force: true });
+    }
+  });
 });

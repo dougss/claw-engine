@@ -1,3 +1,5 @@
+import { loadDefaultEnvFiles } from "./env-loader.js";
+loadDefaultEnvFiles();
 import { createServer } from "./server.js";
 import { reconcileOnStartup } from "./core/reconcile.js";
 import { closeDb } from "./storage/db.js";
@@ -18,7 +20,8 @@ async function main(): Promise<void> {
       connectionString:
         process.env.CLAW_ENGINE_DATABASE_URL ??
         (() => {
-          const pw = process.env[config.database.password_env] ?? "";
+          const pw =
+            process.env[config.database.password_env] ?? "claw_engine_local";
           return `postgresql://${config.database.user}:${pw}@${config.database.host}:${config.database.port}/${config.database.database}`;
         })(),
     }),

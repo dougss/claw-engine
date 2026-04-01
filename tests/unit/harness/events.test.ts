@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isToolUseEvent,
   isSessionEndEvent,
+  isCompactionEvent,
   createTextDelta,
   createTokenUpdate,
 } from "../../../src/harness/events.js";
@@ -29,5 +30,18 @@ describe("HarnessEvent helpers", () => {
     expect(
       isSessionEndEvent({ type: "session_end", reason: "completed" }),
     ).toBe(true);
+  });
+});
+
+describe("compaction event", () => {
+  it("isCompactionEvent returns true for compaction events", () => {
+    const event = {
+      type: "compaction" as const,
+      messagesBefore: 20,
+      messagesAfter: 6,
+      compactionCount: 1,
+    };
+    expect(isCompactionEvent(event)).toBe(true);
+    expect(isCompactionEvent({ type: "text_delta", text: "hi" })).toBe(false);
   });
 });

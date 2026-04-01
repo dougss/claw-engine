@@ -29,16 +29,16 @@ token_budget:
   reserve_for_summary: 10000
 
 models:
-  default: "qwen3.5-plus"
+  default: "qwen3-coder-plus"
   fallback_chain:
-    - { model: "qwen3.5-plus", provider: "alibaba", mode: "engine", max_retries: 2 }
-    - { model: "deepseek-v3", provider: "alibaba", mode: "engine", max_retries: 1 }
+    - { model: "qwen3-coder-plus", provider: "alibaba", mode: "engine", max_retries: 2 }
+    - { model: "qwen3-235b-a22b", provider: "alibaba", mode: "engine", max_retries: 1 }
     - { model: "claude-sonnet", provider: "anthropic", mode: "delegate", max_retries: 1 }
 
 providers:
   alibaba:
-    api_key_env: "DASHSCOPE_API_KEY"
-    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key_env: "BAILIAN_SP_API_KEY"
+    base_url: "https://coding-intl.dashscope.aliyuncs.com/v1"
     rate_limit: { max_requests_per_minute: 8 }
   anthropic:
     binary: "claude"
@@ -49,6 +49,7 @@ providers:
 
 router:
   complexity_signals:
+    # English
     refactor: 3
     debug: 3
     investigate: 2
@@ -62,6 +63,18 @@ router:
     rename: -2
     "add field": -2
     "create endpoint": -1
+    # Portuguese equivalents
+    refatorar: 3
+    depurar: 3
+    investigar: 2
+    arquitetura: 3
+    design: 2
+    "design system": 3
+    layout: 2
+    implementar: 1
+    criar: -1
+    adicionar: -2
+    renomear: -2
 
 validation:
   max_retries: 2

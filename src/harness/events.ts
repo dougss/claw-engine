@@ -7,8 +7,19 @@ export type HarnessEvent =
   | { type: "token_update"; used: number; budget: number; percent: number }
   | { type: "checkpoint"; reason: "token_limit" | "stall" | "manual" }
   | {
+      type: "compaction";
+      messagesBefore: number;
+      messagesAfter: number;
+      compactionCount: number;
+    }
+  | {
       type: "session_end";
-      reason: "completed" | "checkpoint" | "error" | "max_iterations";
+      reason:
+        | "completed"
+        | "checkpoint"
+        | "error"
+        | "max_iterations"
+        | "interrupted";
     };
 
 export function createTextDelta(text: string): HarnessEvent {
@@ -46,4 +57,10 @@ export function isCheckpointEvent(
   event: HarnessEvent,
 ): event is HarnessEvent & { type: "checkpoint" } {
   return event.type === "checkpoint";
+}
+
+export function isCompactionEvent(
+  event: HarnessEvent,
+): event is HarnessEvent & { type: "compaction" } {
+  return event.type === "compaction";
 }

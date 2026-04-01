@@ -17,7 +17,7 @@ export const writeFileTool: ToolHandler = {
     },
     required: ["path", "contents"],
   },
-  async execute(input) {
+  async execute(input, context) {
     if (
       !isRecord(input) ||
       typeof input.path !== "string" ||
@@ -29,7 +29,9 @@ export const writeFileTool: ToolHandler = {
       };
     }
 
-    const filePath = input.path;
+    const filePath = path.isAbsolute(input.path)
+      ? input.path
+      : path.join(context.workspacePath, input.path);
     const dir = path.dirname(filePath);
 
     try {

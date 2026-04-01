@@ -24,7 +24,8 @@ export function registerSubmitCommand(program: import("commander").Command) {
         const connStr =
           process.env.CLAW_ENGINE_DATABASE_URL ??
           (() => {
-            const pw = process.env[config.database.password_env] ?? "";
+            const pw =
+              process.env[config.database.password_env] ?? "claw_engine_local";
             return `postgresql://${config.database.user}:${pw}@${config.database.host}:${config.database.port}/${config.database.database}`;
           })();
         const { getDb } = await import("../../storage/db.js");

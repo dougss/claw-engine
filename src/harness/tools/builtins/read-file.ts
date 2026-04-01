@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { ToolHandler } from "../tool-types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -17,7 +18,7 @@ export const readFileTool: ToolHandler = {
     },
     required: ["path"],
   },
-  async execute(input) {
+  async execute(input, context) {
     if (!isRecord(input) || typeof input.path !== "string") {
       return {
         output: "invalid input: expected { path: string }",
@@ -25,7 +26,9 @@ export const readFileTool: ToolHandler = {
       };
     }
 
-    const filePath = input.path;
+    const filePath = path.isAbsolute(input.path)
+      ? input.path
+      : path.join(context.workspacePath, input.path);
     const offset =
       typeof input.offset === "number" && Number.isFinite(input.offset)
         ? Math.max(0, Math.floor(input.offset))

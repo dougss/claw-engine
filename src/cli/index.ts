@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { loadDefaultEnvFiles } from "../env-loader.js";
+loadDefaultEnvFiles();
 import { Command } from "commander";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerRunCommand } from "./commands/run.js";

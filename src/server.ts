@@ -19,7 +19,8 @@ export async function createServer(configPath?: string) {
   const connectionString =
     process.env.CLAW_ENGINE_DATABASE_URL ??
     (() => {
-      const dbPassword = process.env[config.database.password_env] ?? "";
+      const dbPassword =
+        process.env[config.database.password_env] ?? "claw_engine_local";
       return `postgresql://${config.database.user}:${dbPassword}@${config.database.host}:${config.database.port}/${config.database.database}`;
     })();
   const db = getDb({ connectionString });

@@ -16,6 +16,7 @@ export interface RunAgentLoopInput {
   adapter: ModelAdapter;
   systemPrompt: string;
   userPrompt: string;
+  messages?: Message[];
   tools: ToolDefinition[];
   maxIterations: number;
   tokenBudget: number;
@@ -76,6 +77,7 @@ export async function* runAgentLoop({
   adapter,
   systemPrompt,
   userPrompt,
+  messages: providedMessages,
   tools,
   maxIterations,
   tokenBudget: _tokenBudget,
@@ -86,10 +88,12 @@ export async function* runAgentLoop({
   permissionRules = DEFAULT_PERMISSION_RULES,
   mcpCallTool,
 }: RunAgentLoopInput): AsyncGenerator<HarnessEvent> {
-  const messages: Message[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt },
-  ];
+  const messages: Message[] =
+    providedMessages ??
+    ([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ] as Message[]);
 
   for (let i = 0; i < maxIterations; i++) {
     let sawToolUse = false;

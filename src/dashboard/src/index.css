@@ -1,1 +1,87 @@
 @import "tailwindcss";
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap");
+
+@theme {
+  /* ── Brand Colors (OLED Dark) ── */
+  --color-bg: #020617;
+  --color-surface: #0f172a;
+  --color-surface-2: #1e293b;
+  --color-surface-3: #334155;
+
+  /* ── Borders ── */
+  --color-border: #0f172a;
+  --color-border-2: #1e293b;
+  --color-border-3: #334155;
+
+  /* ── Text ── */
+  --color-text-primary: #f8fafc;
+  --color-text-muted: #94a3b8;
+  --color-text-dim: #475569;
+
+  /* ── Accent ── */
+  --color-accent: #22c55e;
+  --color-accent-dim: #16a34a;
+  --color-accent-glow: rgba(34, 197, 94, 0.12);
+
+  /* ── Status ── */
+  --color-status-completed: #22c55e;
+  --color-status-running: #3b82f6;
+  --color-status-pending: #f59e0b;
+  --color-status-failed: #ef4444;
+  --color-status-starting: #eab308;
+  --color-status-provisioning: #a855f7;
+  --color-status-checkpointing: #f97316;
+  --color-status-validating: #8b5cf6;
+
+  /* ── Typography ── */
+  --font-heading: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Code", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background-color: #020617;
+  color: #f8fafc;
+  font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Animations ── */
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.status-pulse {
+  animation: status-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-pulse {
+    animation: none;
+  }
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}

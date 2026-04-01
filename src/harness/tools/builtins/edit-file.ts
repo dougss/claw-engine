@@ -1,4 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { ToolHandler } from "../tool-types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -30,7 +31,7 @@ export const editFileTool: ToolHandler = {
     },
     required: ["path", "old_string", "new_string"],
   },
-  async execute(input) {
+  async execute(input, context) {
     if (
       !isRecord(input) ||
       typeof input.path !== "string" ||
@@ -48,8 +49,12 @@ export const editFileTool: ToolHandler = {
       return { output: "old_string must not be empty", isError: true };
     }
 
+    const filePath = path.isAbsolute(input.path)
+      ? input.path
+      : path.join(context.workspacePath, input.path);
+
     try {
-      const contents = await readFile(input.path, "utf8");
+      const contents = await readFile(filePath, "utf8");
       const occurrences = countOccurrences(contents, input.old_string);
 
       if (occurrences === 0) {
@@ -64,7 +69,7 @@ export const editFileTool: ToolHandler = {
       }
 
       const next = contents.replace(input.old_string, input.new_string);
-      await writeFile(input.path, next, "utf8");
+      await writeFile(filePath, next, "utf8");
       return { output: "ok", isError: false };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

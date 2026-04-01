@@ -121,6 +121,7 @@ export interface ClaudePipeOptions {
   model?: string;
   allowedTools?: string[];
   workspacePath?: string;
+  /** Hard timeout before killing claude -p. Default: 60 minutes. */
   timeoutMs?: number;
   claudeBin?: string;
 }
@@ -138,7 +139,7 @@ export async function* runClaudePipe(
     model,
     allowedTools,
     workspacePath,
-    timeoutMs = 300_000,
+    timeoutMs = 3_600_000, // 60 minutes
     claudeBin = "claude",
   } = opts;
 
@@ -164,7 +165,11 @@ export async function* runClaudePipe(
     proc.on("close", (code) => resolve(code ?? 1));
   });
 
-  const timer = setTimeout(() => proc.kill("SIGTERM"), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill("SIGTERM");
+  }, timeoutMs);
 
   let sawResultLine = false;
 
@@ -201,6 +206,16 @@ export async function* runClaudePipe(
     // stdout closed without a result line — check exit code
     const exitCode = await exitPromise;
     if (exitCode !== 0) {
+      // 143 = SIGTERM (128+15), 130 = SIGINT (128+2)
+      if (exitCode === 143 || exitCode === 130) {
+        if (timedOut) {
+          throw new Error(
+            `claude -p timed out after ${Math.round(timeoutMs / 60_000)} minutes`,
+          );
+        }
+        yield { type: "session_end" as const, reason: "interrupted" };
+        return;
+      }
       const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
       throw new Error(
         `claude -p exited with code ${exitCode}${stderr ? `: ${stderr}` : ""}`,
