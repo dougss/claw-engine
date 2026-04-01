@@ -18,7 +18,7 @@ export async function createWorkItem(db: Db, input: CreateWorkItemInput) {
     .values({
       title: input.title,
       description: input.description ?? null,
-      source: "api",
+      source: input.source ?? "api",
       dag: { repos: input.repos },
       status: "queued",
       priority: input.priority ?? 3,

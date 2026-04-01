@@ -1,3 +1,5 @@
+import { loadConfig } from "../../config.js";
+
 export function registerSubmitCommand(program: import("commander").Command) {
   program
     .command("submit <description>")
@@ -17,12 +19,29 @@ export function registerSubmitCommand(program: import("commander").Command) {
           if (opts.issue) console.log(`  issue: ${opts.issue}`);
           return;
         }
-        console.log(`[claw submit] Queuing work item: "${description}"`);
-        if (repos.length) console.log(`  repos: ${repos.join(", ")}`);
-        console.log(
-          "TODO: integrate with work item queue when Task 16 is complete",
-        );
-        process.exit(0);
+
+        const config = loadConfig();
+        const connStr =
+          process.env.CLAW_ENGINE_DATABASE_URL ??
+          (() => {
+            const pw = process.env[config.database.password_env] ?? "";
+            return `postgresql://${config.database.user}:${pw}@${config.database.host}:${config.database.port}/${config.database.database}`;
+          })();
+        const { getDb } = await import("../../storage/db.js");
+        const { createWorkItem } =
+          await import("../../storage/repositories/work-items-repo.js");
+        const db = getDb({ connectionString: connStr });
+        const wi = await createWorkItem(db, {
+          title: description,
+          description,
+          repos,
+          source: "cli",
+        });
+
+        console.log(`✅ Work item created: ${wi.id}`);
+        console.log(`   Title: ${wi.title}`);
+        if (repos.length) console.log(`   Repos: ${repos.join(", ")}`);
+        console.log(`   Status: ${wi.status}`);
       },
     );
 }

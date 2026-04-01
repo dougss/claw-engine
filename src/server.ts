@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import { Redis } from "ioredis";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
@@ -61,9 +61,10 @@ export async function createServer(configPath?: string) {
   );
 
   // Serve React dashboard static files in production
+  // import.meta.url → dist/server.js → dirname = dist/ → join "dashboard" = dist/dashboard/
   const dashboardDir = join(
-    fileURLToPath(import.meta.url),
-    "../../dist/dashboard",
+    dirname(fileURLToPath(import.meta.url)),
+    "dashboard",
   );
   if (existsSync(dashboardDir)) {
     await app.register(fastifyStatic, {
