@@ -86,13 +86,8 @@ export function withRetry(
 
     while (true) {
       try {
-        let gotFirstToken = false;
         for await (const event of adapter.chat(messages, tools)) {
-          gotFirstToken = true;
           yield event;
-        }
-        if (!gotFirstToken && attempt < resolved.maxRetries) {
-          // Empty stream with no events — not retryable, just return
         }
         return;
       } catch (err) {
