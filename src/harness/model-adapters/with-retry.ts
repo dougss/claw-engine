@@ -103,24 +103,44 @@ export function withRetry(
         } catch (err) {
           const retryableErr = err as RetryableError;
 
-          if (!isRetryable(retryableErr) || attempt >= resolved.maxRetries) {
-            // All retries exhausted for current adapter, check if there's a fallback
-            if (resolved.config && resolved.fallbackChainPosition !== undefined) {
+          // BUG 1 FIX: Non-retryable errors (401, 403, etc.) re-throw immediately — no fallback.
+          // A credential error won't be fixed by switching models.
+          if (!isRetryable(retryableErr)) {
+            throw err;
+          }
+
+          // BUG 2 FIX: Use per-tier max_retries from config instead of hardcoded default.
+          const effectiveMaxRetries =
+            resolved.config?.models.fallback_chain[currentFallbackPosition]
+              ?.max_retries ?? resolved.maxRetries;
+
+          if (attempt >= effectiveMaxRetries) {
+            // Retries exhausted on a retryable error — check if there's a fallback tier.
+            if (
+              resolved.config &&
+              resolved.fallbackChainPosition !== undefined
+            ) {
               const fallbackChain = resolved.config.models.fallback_chain;
-              
-              // Find next alibaba tier in the chain (engine→engine fallback only)
+
+              // Find next alibaba engine tier in the chain
               let nextFallbackPosition = -1;
-              for (let i = currentFallbackPosition + 1; i < fallbackChain.length; i++) {
-                if (fallbackChain[i].provider === "alibaba" && fallbackChain[i].mode === "engine") {
+              for (
+                let i = currentFallbackPosition + 1;
+                i < fallbackChain.length;
+                i++
+              ) {
+                if (
+                  fallbackChain[i].provider === "alibaba" &&
+                  fallbackChain[i].mode === "engine"
+                ) {
                   nextFallbackPosition = i;
                   break;
                 }
               }
 
               if (nextFallbackPosition !== -1) {
-                // Create new adapter with next tier in the chain
                 const nextTier = fallbackChain[nextFallbackPosition];
-                
+
                 yield {
                   type: "model_fallback",
                   from: currentAdapter.name,
@@ -128,7 +148,8 @@ export function withRetry(
                   reason: retryableErr.message ?? String(err),
                 };
 
-                // Create new adapter with the next tier
+                // BUG 3 FIX: costPerInputToken/costPerOutputToken not in config schema,
+                // so fall back to currentAdapter values (no config fields to read from).
                 currentAdapter = createAlibabaAdapter({
                   name: nextTier.model,
                   model: nextTier.model,
@@ -139,14 +160,13 @@ export function withRetry(
                   costPerOutputToken: currentAdapter.costPerOutputToken,
                 });
 
-                // Update fallback position and reset attempts for the new adapter
                 currentFallbackPosition = nextFallbackPosition;
                 attempt = 0;
-                continue; // Try with the new adapter
+                continue;
               }
             }
 
-            // No fallback available or fallback disabled, re-throw the error
+            // No fallback available — re-throw.
             throw err;
           }
 
@@ -163,7 +183,7 @@ export function withRetry(
           yield {
             type: "api_retry",
             attempt,
-            maxAttempts: resolved.maxRetries,
+            maxAttempts: effectiveMaxRetries,
             delayMs,
             error: retryableErr.message ?? String(err),
           };
