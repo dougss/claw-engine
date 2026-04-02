@@ -201,6 +201,12 @@ export async function* runOpencodePipe(
         } catch {
           continue;
         }
+        // DEBUG: log raw events to /tmp/opencode-events.jsonl
+        import("node:fs")
+          .then((fs) =>
+            fs.appendFileSync("/tmp/opencode-events.jsonl", trimmed + "\n"),
+          )
+          .catch(() => {});
 
         if (parsed.type === "error") {
           const err = parsed as OpencodeErrorLine;
