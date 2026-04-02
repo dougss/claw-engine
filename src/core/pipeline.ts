@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import type { ClawEngineConfig } from "../config-schema.js";
 import type { HarnessEvent, PipelinePhase } from "../harness/events.js";
 import { runClaudePipe } from "../integrations/claude-p/claude-pipe.js";
@@ -42,6 +43,33 @@ export interface PipelineResult {
   validation: ValidationResult;
   review: string;
   prUrl: string | null;
+}
+
+// ── GIT COMMIT + PUSH ─────────────────────────────────────────────────────────
+
+function gitCommitAndPush(repoPath: string, prompt: string): string {
+  const opts = { cwd: repoPath, encoding: "utf-8" as const };
+
+  const status = execSync("git status --porcelain", opts).trim();
+  if (!status) return execSync("git rev-parse --abbrev-ref HEAD", opts).trim();
+
+  const currentBranch = execSync(
+    "git rev-parse --abbrev-ref HEAD",
+    opts,
+  ).trim();
+  let branch = currentBranch;
+  if (currentBranch === "main" || currentBranch === "master") {
+    branch = `claw/run-${Date.now()}`;
+    execSync(`git checkout -b ${branch}`, opts);
+  }
+
+  execSync("git add -A", opts);
+  const msg =
+    prompt.length > 72 ? `claw: ${prompt.slice(0, 72)}` : `claw: ${prompt}`;
+  execSync(`git commit -m ${JSON.stringify(msg)}`, opts);
+  execSync("git push origin HEAD", opts);
+
+  return branch;
 }
 
 // ── PLAN ─────────────────────────────────────────────────────────────────────
@@ -288,6 +316,7 @@ interface PrPhaseInput {
   onEvent: (event: HarnessEvent) => void;
   openPr?: boolean;
   execGh?: (args: string[], cwd: string) => Promise<string>;
+  branch?: string;
 }
 
 export async function prPhase({
@@ -297,6 +326,7 @@ export async function prPhase({
   onEvent,
   openPr = true,
   execGh,
+  branch,
 }: PrPhaseInput): Promise<string | null> {
   if (!openPr) return null;
 
@@ -320,17 +350,11 @@ export async function prPhase({
     });
 
   try {
-    const url = await exec(
-      [
-        "pr",
-        "create",
-        "--title",
-        JSON.stringify(title),
-        "--body",
-        JSON.stringify(review),
-      ],
-      repoPath,
-    );
+    const args = ["pr", "create", "--title", title, "--body", review];
+    if (branch) {
+      args.push("--base", "main", "--head", branch);
+    }
+    const url = await exec(args, repoPath);
     const durationMs = Date.now() - start;
     onEvent({ type: "phase_end", phase: "pr", success: true, durationMs });
     return url;
@@ -465,6 +489,16 @@ export async function runPipeline(
     onEvent,
     getDiff: input.getDiff,
   });
+
+  let prBranch: string | undefined;
+  if (openPr) {
+    try {
+      prBranch = gitCommitAndPush(repoPath, prompt);
+    } catch (err: any) {
+      throw new Error(`Failed to commit/push for PR: ${err.message}`);
+    }
+  }
+
   const prUrl = await prPhase({
     repoPath,
     prompt,
@@ -472,6 +506,7 @@ export async function runPipeline(
     onEvent,
     openPr,
     execGh: prExecGh,
+    branch: prBranch,
   });
 
   return { plan, executeSuccess: true, validation, review, prUrl };

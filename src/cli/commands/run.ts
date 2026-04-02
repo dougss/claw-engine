@@ -269,7 +269,10 @@ export function registerRunCommand(program: import("commander").Command) {
             });
 
             if (result.executeSuccess) {
-              autoCommit(repoPath, prompt, !!opts.noCommit);
+              // Pipeline with --pr handles commit+push internally; skip autoCommit
+              if (!opts.pr) {
+                autoCommit(repoPath, prompt, !!opts.noCommit);
+              }
               console.log("\n✅ pipeline complete");
               if (result.prUrl) console.log(`PR: ${result.prUrl}`);
               await finalizeDb("completed", "completed");
