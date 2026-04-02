@@ -13,6 +13,7 @@ import { registerMetricsRoutes } from "./api/routes/metrics.js";
 import { registerLogsRoutes } from "./api/routes/logs.js";
 import { registerSessionRoutes } from "./api/routes/sessions.js";
 import { registerStatsRoutes } from "./api/routes/stats.js";
+import { registerRunApiRoutes } from "./api/routes/run-api.js";
 import { handleSseConnection } from "./api/sse.js";
 
 export async function createServer(configPath?: string) {
@@ -45,6 +46,7 @@ export async function createServer(configPath?: string) {
       registerLogsRoutes(api, db);
       registerSessionRoutes(api, db);
       registerStatsRoutes(api, db);
+      registerRunApiRoutes(api, db, redis);
 
       // Health check endpoint
       api.get("/health", async (_request, reply) => {
