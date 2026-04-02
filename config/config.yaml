@@ -29,10 +29,9 @@ token_budget:
   reserve_for_summary: 10000
 
 models:
-  default: "qwen3-coder-plus"
+  default: "qwen3-coder-plus"  # used only for task classification (classifyTask)
   fallback_chain:
-    - { model: "qwen3-coder-plus", provider: "alibaba", mode: "engine", max_retries: 2 }
-    - { model: "qwen3-235b-a22b", provider: "alibaba", mode: "engine", max_retries: 1 }
+    - { model: "opencode-default", provider: "opencode", mode: "delegate", max_retries: 2 }
     - { model: "claude-sonnet", provider: "anthropic", mode: "delegate", max_retries: 1 }
 
 providers:
@@ -46,6 +45,9 @@ providers:
     estimated_daily_limit: 500000
     warning_percent: 0.70
     force_qwen_percent: 0.85
+  opencode:
+    binary: "opencode"
+    default_model: "dashscope/qwen3-coder-plus"
 
 validation:
   max_retries: 2

@@ -26,12 +26,12 @@ const testConfig: ClawEngineConfig = {
     reserve_for_summary: 10000,
   },
   models: {
-    default: "qwen-turbo",
+    default: "opencode-default",
     fallback_chain: [
       {
-        model: "qwen-turbo",
-        provider: "alibaba",
-        mode: "engine",
+        model: "opencode-default",
+        provider: "opencode",
+        mode: "delegate",
         max_retries: 2,
       },
       {
@@ -55,6 +55,9 @@ const testConfig: ClawEngineConfig = {
       warning_percent: 0.7,
       force_qwen_percent: 0.85,
     },
+    opencode: {
+      binary: "opencode",
+    },
   },
   validation: { max_retries: 2, typescript: [], python: [] },
   mcp: { servers: {} },
@@ -73,41 +76,38 @@ const testConfig: ClawEngineConfig = {
 };
 
 describe("routeTask", () => {
-  it("simple complexity → alibaba engine mode", () => {
+  it("simple complexity → opencode delegate", () => {
     const result = routeTask(
       {
         complexity: "simple",
         description: "add a button",
         fallbackChainPosition: 0,
-        claudeBudgetPercent: 0,
       },
       testConfig,
     );
-    expect(result.provider).toBe("alibaba");
-    expect(result.mode).toBe("engine");
+    expect(result.provider).toBe("opencode");
+    expect(result.mode).toBe("delegate");
   });
 
-  it("medium complexity → alibaba engine mode", () => {
+  it("medium complexity → opencode delegate", () => {
     const result = routeTask(
       {
         complexity: "medium",
         description: "add a feature with some logic",
         fallbackChainPosition: 0,
-        claudeBudgetPercent: 0,
       },
       testConfig,
     );
-    expect(result.provider).toBe("alibaba");
-    expect(result.mode).toBe("engine");
+    expect(result.provider).toBe("opencode");
+    expect(result.mode).toBe("delegate");
   });
 
-  it("complex complexity → anthropic delegate mode", () => {
+  it("complex complexity → anthropic delegate", () => {
     const result = routeTask(
       {
         complexity: "complex",
         description: "complex architecture change",
         fallbackChainPosition: 0,
-        claudeBudgetPercent: 0,
       },
       testConfig,
     );
@@ -121,7 +121,6 @@ describe("routeTask", () => {
         complexity: "simple",
         description: "anything",
         fallbackChainPosition: 1,
-        claudeBudgetPercent: 0,
       },
       testConfig,
     );
@@ -129,17 +128,57 @@ describe("routeTask", () => {
     expect(result.provider).toBe("anthropic");
   });
 
-  it("claudeBudgetPercent: 90 (>= 85%) → forces alibaba even for complex tasks", () => {
+  it("no opencode in chain + simple → falls back to chain[0]", () => {
+    const configNoOpencode = {
+      ...testConfig,
+      models: {
+        ...testConfig.models,
+        fallback_chain: [
+          {
+            model: "claude-sonnet-4-5",
+            provider: "anthropic" as const,
+            mode: "delegate" as const,
+            max_retries: 1,
+          },
+        ],
+      },
+    };
+    const result = routeTask(
+      {
+        complexity: "simple",
+        description: "small fix",
+        fallbackChainPosition: 0,
+      },
+      configNoOpencode,
+    );
+    expect(result.provider).toBe("anthropic");
+    expect(result.mode).toBe("delegate");
+  });
+
+  it("no anthropic in chain + complex → falls back to opencode", () => {
+    const configNoAnthropic = {
+      ...testConfig,
+      models: {
+        ...testConfig.models,
+        fallback_chain: [
+          {
+            model: "opencode-default",
+            provider: "opencode" as const,
+            mode: "delegate" as const,
+            max_retries: 2,
+          },
+        ],
+      },
+    };
     const result = routeTask(
       {
         complexity: "complex",
         description: "complex task",
         fallbackChainPosition: 0,
-        claudeBudgetPercent: 90,
       },
-      testConfig,
+      configNoAnthropic,
     );
-    expect(result.provider).toBe("alibaba");
-    expect(result.reason).toContain("claude budget exceeded");
+    expect(result.provider).toBe("opencode");
+    expect(result.mode).toBe("delegate");
   });
 });

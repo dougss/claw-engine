@@ -3,7 +3,14 @@ import type { HarnessEvent } from "../events.js";
 
 export interface ModelAdapter {
   name: string;
-  provider: "alibaba" | "anthropic" | "google" | "openai" | "local" | "mock";
+  provider:
+    | "alibaba"
+    | "anthropic"
+    | "opencode"
+    | "google"
+    | "openai"
+    | "local"
+    | "mock";
   maxContext: number;
   supportsToolUse: boolean;
   supportsStreaming: boolean;

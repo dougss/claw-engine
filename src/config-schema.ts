@@ -11,6 +11,7 @@ const modelTierSchema = z.object({
     z.literal("anthropic"),
     z.literal("google"),
     z.literal("openai"),
+    z.literal("opencode"),
     z.literal("local"),
   ]),
   mode: z.union([z.literal("engine"), z.literal("delegate")]),
@@ -98,6 +99,12 @@ export const configSchema = z.object({
       warning_percent: z.number().default(0.7),
       force_qwen_percent: z.number().default(0.85),
     }),
+    opencode: z
+      .object({
+        binary: z.string().default("opencode"),
+        default_model: z.string().optional(),
+      })
+      .default({}),
   }),
 
   validation: z.object({

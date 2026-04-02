@@ -125,6 +125,7 @@ export interface ClaudePipeOptions {
   timeoutMs?: number;
   claudeBin?: string;
   maxTurns?: number;
+  resumeId?: string;
 }
 
 /**
@@ -153,6 +154,7 @@ export async function* runClaudePipe(
   if (allowedTools && allowedTools.length > 0) {
     args.push("--allowedTools", allowedTools.join(","));
   }
+  if (opts.resumeId) args.push("--resume", opts.resumeId);
 
   const proc = spawn(claudeBin, args, {
     cwd: workspacePath,
