@@ -1,4 +1,5 @@
 import { resolve, basename } from "node:path";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { loadConfig } from "../../config.js";
 import { loadProjectContext } from "../../harness/context-builder.js";
 import { routeTask } from "../../core/router.js";
@@ -34,30 +35,38 @@ import { grepTool } from "../../harness/tools/builtins/grep-tool.js";
 import { execSync } from "node:child_process";
 
 export function registerRunCommand(program: import("commander").Command) {
+  function autoCommit(
+    repoPath: string,
+    prompt: string,
+    noCommit: boolean,
+  ): void {
+    if (noCommit) {
+      console.log("[git] skipping auto-commit due to --no-commit flag");
+      return;
+    }
 
-function autoCommit(repoPath: string, prompt: string, noCommit: boolean): void {
-  if (noCommit) {
-    console.log("[git] skipping auto-commit due to --no-commit flag");
-    return;
+    const statusOutput = execSync(`git -C "${repoPath}" status --porcelain`, {
+      encoding: "utf-8",
+    });
+
+    if (!statusOutput.trim()) {
+      console.log("[git] nothing to commit");
+      return;
+    }
+
+    execSync(`git -C "${repoPath}" add -A`, { stdio: "inherit" });
+
+    // Truncate prompt to 72 characters for commit message
+    const commitMessage =
+      prompt.length > 72
+        ? `claw: ${prompt.substring(0, 72)}`
+        : `claw: ${prompt}`;
+
+    execSync(`git -C "${repoPath}" commit -m "${commitMessage}"`, {
+      stdio: "inherit",
+    });
+    console.log("[git] committed changes");
   }
-
-  const statusOutput = execSync(`git -C "${repoPath}" status --porcelain`, { encoding: 'utf-8' });
-  
-  if (!statusOutput.trim()) {
-    console.log("[git] nothing to commit");
-    return;
-  }
-
-  execSync(`git -C "${repoPath}" add -A`, { stdio: 'inherit' });
-  
-  // Truncate prompt to 72 characters for commit message
-  const commitMessage = prompt.length > 72 
-    ? `claw: ${prompt.substring(0, 72)}`
-    : `claw: ${prompt}`;
-    
-  execSync(`git -C "${repoPath}" commit -m "${commitMessage}"`, { stdio: 'inherit' });
-  console.log("[git] committed changes");
-}
   program
     .command("run <repo> <prompt>")
     .description("Run a single task directly in a repo")
@@ -82,7 +91,25 @@ function autoCommit(repoPath: string, prompt: string, noCommit: boolean): void {
           noCommit?: boolean;
         },
       ) => {
-        const repoPath = resolve(repo);
+        const GITHUB_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
+        let isGithubRepo = false;
+        let tempDir: string | null = null;
+        let repoPath = resolve(repo);
+
+        if (GITHUB_RE.test(repo) && !existsSync(repoPath)) {
+          const [owner, repoName] = repo.split("/");
+          tempDir = `/tmp/claw-runs/${owner}-${repoName}-${Date.now()}`;
+          mkdirSync(tempDir, { recursive: true });
+          console.log(
+            `[git] cloning https://github.com/${repo}.git → ${tempDir}`,
+          );
+          execSync(
+            `git clone https://github.com/${owner}/${repoName}.git "${tempDir}"`,
+            { stdio: "inherit" },
+          );
+          repoPath = tempDir;
+          isGithubRepo = true;
+        }
 
         if (opts.dryRun) {
           console.log(`[dry-run] Would run in ${repoPath}: "${prompt}"`);
@@ -205,6 +232,15 @@ function autoCommit(repoPath: string, prompt: string, noCommit: boolean): void {
                 if (event.reason === "completed") {
                   console.log("\n✅ done");
                   autoCommit(repoPath, prompt, !!opts.noCommit);
+                  if (isGithubRepo) {
+                    execSync(`git -C "${repoPath}" push origin HEAD`, {
+                      stdio: "inherit",
+                    });
+                    if (tempDir) {
+                      rmSync(tempDir, { recursive: true, force: true });
+                      tempDir = null;
+                    }
+                  }
                 } else if (event.reason === "interrupted") {
                   console.log("\n⏹  interrupted");
                 } else {
@@ -215,6 +251,11 @@ function autoCommit(repoPath: string, prompt: string, noCommit: boolean): void {
           } catch (err) {
             endReason = "failed";
             console.error("\n❌", (err as Error).message);
+          } finally {
+            if (tempDir) {
+              rmSync(tempDir, { recursive: true, force: true });
+              tempDir = null;
+            }
           }
 
           const taskStatus =
@@ -418,6 +459,15 @@ function autoCommit(repoPath: string, prompt: string, noCommit: boolean): void {
                 if (reason === "completed") {
                   console.log("\n✅ done");
                   autoCommit(repoPath, prompt, !!opts.noCommit);
+                  if (isGithubRepo) {
+                    execSync(`git -C "${repoPath}" push origin HEAD`, {
+                      stdio: "inherit",
+                    });
+                    if (tempDir) {
+                      rmSync(tempDir, { recursive: true, force: true });
+                      tempDir = null;
+                    }
+                  }
                 } else if (reason === "checkpoint") {
                   if (autoResume && resumeCount < MAX_RESUMES) {
                     resumeCount++;
@@ -439,6 +489,11 @@ function autoCommit(repoPath: string, prompt: string, noCommit: boolean): void {
           } catch (err) {
             endReason = "failed";
             console.error("\n❌", (err as Error).message);
+          } finally {
+            if (tempDir) {
+              rmSync(tempDir, { recursive: true, force: true });
+              tempDir = null;
+            }
           }
 
           const taskStatus =
