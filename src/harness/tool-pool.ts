@@ -19,6 +19,7 @@ export const TOOL_PROFILES: Record<string, string[]> = {
     "task_list",
     "task_update",
     "task_get",
+    "spawn_agent",
   ],
   [TOOL_PROFILE.simple]: ["read_file", "glob", "grep", "ask_user"],
   [TOOL_PROFILE.readonly]: ["read_file", "glob", "grep"],

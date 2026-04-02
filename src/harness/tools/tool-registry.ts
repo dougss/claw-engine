@@ -2,7 +2,13 @@ import type { ToolDefinition } from "../../types.js";
 import type { ToolHandler } from "./tool-types.js";
 import { webFetchTool } from "./builtins/web-fetch.js";
 import { webSearchTool } from "./builtins/web-search.js";
-import { taskCreateTool, taskListTool, taskUpdateTool, taskGetTool } from "./builtins/task-tools.js";
+import {
+  taskCreateTool,
+  taskListTool,
+  taskUpdateTool,
+  taskGetTool,
+} from "./builtins/task-tools.js";
+import { spawnAgentTool } from "./builtins/agent-tool.js";
 
 const toolsByName = new Map<string, ToolHandler>();
 const mcpToolsByName = new Map<string, ToolDefinition>();
@@ -60,3 +66,4 @@ registerTool(taskCreateTool);
 registerTool(taskListTool);
 registerTool(taskUpdateTool);
 registerTool(taskGetTool);
+registerTool(spawnAgentTool);
