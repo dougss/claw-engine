@@ -2,61 +2,43 @@ import { spawn } from "node:child_process";
 import type { HarnessEvent } from "../../harness/events.js";
 
 // ── JSON line types from `opencode run --format json` ────────────────────────
+// All payload is nested under `part`. Verified against actual opencode output.
 
-export type OpencodeStreamLine =
-  | OpencodeStepStartLine
-  | OpencodeTextLine
-  | OpencodeToolUseLine
-  | OpencodeStepFinishLine
-  | OpencodeErrorLine
-  | { type: string };
-
-export interface OpencodeStepStartLine {
-  type: "step_start";
+export interface OpencodeStreamLine {
+  type: string;
   timestamp: number;
   sessionID: string;
   part?: unknown;
-  snapshot_hash?: string;
+  error?: { name?: string; data?: { message?: string; statusCode?: number } };
 }
 
-export interface OpencodeTextLine {
+// part shapes
+interface PartStepStart {
+  type: "step-start";
+  snapshot?: string;
+}
+
+interface PartText {
   type: "text";
-  timestamp: number;
-  sessionID: string;
   text: string;
 }
 
-export interface OpencodeToolUseLine {
-  type: "tool_use";
-  timestamp: number;
-  sessionID: string;
-  tool: {
-    name: string;
+interface PartTool {
+  type: "tool";
+  tool: string; // tool name (e.g. "read", "edit")
+  callID: string;
+  state?: {
+    status?: string;
     input?: unknown;
     output?: string;
-    time?: number;
   };
 }
 
-export interface OpencodeStepFinishLine {
-  type: "step_finish";
-  timestamp: number;
-  sessionID: string;
-  finish: {
-    reason: "stop" | "tool-calls";
-    tokens?: { input?: number; output?: number };
-    cost?: number;
-  };
-}
-
-export interface OpencodeErrorLine {
-  type: "error";
-  timestamp: number;
-  sessionID: string;
-  error: {
-    name?: string;
-    data?: { message?: string; statusCode?: number };
-  };
+interface PartStepFinish {
+  type: "step-finish";
+  reason: "stop" | "tool-calls";
+  tokens?: { input?: number; output?: number; total?: number };
+  cost?: number;
 }
 
 // Max context budget used for token_update percent calculation
@@ -71,12 +53,11 @@ export function* parseOpencodeLine(
   state: { sessionEmitted: boolean; totalTokens: number; model: string },
 ): Generator<HarnessEvent> {
   if (line.type === "step_start") {
-    const init = line as OpencodeStepStartLine;
     if (!state.sessionEmitted) {
       state.sessionEmitted = true;
       yield {
         type: "session_start",
-        sessionId: init.sessionID,
+        sessionId: line.sessionID,
         model: state.model,
       };
     }
@@ -84,28 +65,28 @@ export function* parseOpencodeLine(
   }
 
   if (line.type === "text") {
-    const text = line as OpencodeTextLine;
-    if (text.text) {
-      yield { type: "text_delta", text: text.text };
+    const part = line.part as PartText | undefined;
+    if (part?.text) {
+      yield { type: "text_delta", text: part.text };
     }
     return;
   }
 
   if (line.type === "tool_use") {
-    const tu = line as OpencodeToolUseLine;
-    if (!tu.tool?.name) return; // guard: opencode may emit partial tool events without name
+    const part = line.part as PartTool | undefined;
+    if (!part?.tool) return;
     yield {
       type: "tool_use",
-      id: `opencode-tool-${tu.timestamp}`,
-      name: tu.tool.name,
-      input: tu.tool.input ?? {},
+      id: part.callID ?? `opencode-tool-${line.timestamp}`,
+      name: part.tool,
+      input: part.state?.input ?? {},
     };
     return;
   }
 
   if (line.type === "step_finish") {
-    const sf = line as OpencodeStepFinishLine;
-    const tokens = sf.finish?.tokens;
+    const part = line.part as PartStepFinish | undefined;
+    const tokens = part?.tokens;
     if (tokens) {
       const stepTokens = (tokens.input ?? 0) + (tokens.output ?? 0);
       state.totalTokens += stepTokens;
@@ -201,12 +182,6 @@ export async function* runOpencodePipe(
         } catch {
           continue;
         }
-        // DEBUG: log raw events to /tmp/opencode-events.jsonl
-        import("node:fs")
-          .then((fs) =>
-            fs.appendFileSync("/tmp/opencode-events.jsonl", trimmed + "\n"),
-          )
-          .catch(() => {});
 
         if (parsed.type === "error") {
           const err = parsed as OpencodeErrorLine;
