@@ -262,6 +262,7 @@ export function registerRunCommand(program: import("commander").Command) {
             "4. After every implementation, run: bash({command:'npx tsc --noEmit'}) then bash({command:'npx vitest run'}).",
             "5. If a command fails, read the error, fix it, re-run. Never give up silently.",
             "6. Do NOT return a text-only response until verification succeeds.",
+            "7. Prefer edit_file for modifying existing files. Use write_file only for NEW files, and keep new files under 100 lines — split larger files.",
             ...(projectContext
               ? ["", "## Project Context", projectContext]
               : []),

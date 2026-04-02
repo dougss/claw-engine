@@ -8,6 +8,7 @@ interface AlibabaAdapterOptions {
   apiKey?: string;
   baseUrl?: string;
   maxContext?: number;
+  maxOutputTokens?: number;
   costPerInputToken?: number;
   costPerOutputToken?: number;
 }
@@ -95,6 +96,7 @@ export function createAlibabaAdapter({
   apiKey,
   baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
   maxContext = 128000,
+  maxOutputTokens = 8192,
   costPerInputToken = 0,
   costPerOutputToken = 0,
 }: AlibabaAdapterOptions): ModelAdapter {
@@ -120,6 +122,7 @@ export function createAlibabaAdapter({
         messages: toOAIMessages(messages),
         stream: true,
         stream_options: { include_usage: true },
+        max_tokens: maxOutputTokens,
       };
 
       if (tools.length > 0) {
@@ -235,10 +238,40 @@ export function createAlibabaAdapter({
                 yield { type: "tool_use", id: tc.id, name: tc.name, input };
               }
               pendingToolCalls.clear();
-            } else if (
-              choice.finish_reason === "stop" ||
-              choice.finish_reason === "length"
-            ) {
+            } else if (choice.finish_reason === "length") {
+              // Output token limit hit. If tool calls were accumulating, try to
+              // yield them anyway — arguments may be truncated but at least the
+              // agent loop will see the tool use and can react.
+              if (pendingToolCalls.size > 0) {
+                for (const [, tc] of pendingToolCalls) {
+                  let input: unknown = {};
+                  try {
+                    input = JSON.parse(tc.arguments);
+                  } catch {
+                    // Truncated JSON — extract whatever fields parsed cleanly
+                    const partial = tc.arguments
+                      .replace(/,?\s*"[^"]*"\s*:\s*[^,}]*$/, "")
+                      .trimEnd();
+                    try {
+                      input = JSON.parse(partial + "}");
+                    } catch {
+                      input = { raw: tc.arguments };
+                    }
+                  }
+                  yield { type: "tool_use", id: tc.id, name: tc.name, input };
+                }
+                pendingToolCalls.clear();
+              }
+              if (totalTokens > 0) {
+                yield {
+                  type: "token_update",
+                  used: totalTokens,
+                  budget: maxContext,
+                  percent: Math.round((totalTokens / maxContext) * 100),
+                };
+              }
+              return;
+            } else if (choice.finish_reason === "stop") {
               if (totalTokens > 0) {
                 yield {
                   type: "token_update",
