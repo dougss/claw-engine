@@ -21,13 +21,21 @@ function countOccurrences(haystack: string, needle: string) {
 
 export const editFileTool: ToolHandler = {
   name: "edit_file",
-  description: "Replace exactly one occurrence in a file",
+  description:
+    'Replace exactly one occurrence of a string in a file. Example: {"path": "src/foo.ts", "old_string": "const x = 1;", "new_string": "const x = 2;"}',
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string" },
-      old_string: { type: "string" },
-      new_string: { type: "string" },
+      path: {
+        type: "string",
+        description: "File path relative to workspace root, e.g. src/foo.ts",
+      },
+      old_string: {
+        type: "string",
+        description:
+          "Exact string to find and replace (must appear exactly once)",
+      },
+      new_string: { type: "string", description: "String to replace it with" },
     },
     required: ["path", "old_string", "new_string"],
   },

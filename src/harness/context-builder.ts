@@ -1,4 +1,5 @@
 import type { Message, ToolDefinition } from "../types.js";
+import { readFile, readdir } from "node:fs/promises";
 
 export interface TaskInput {
   description: string;
@@ -153,4 +154,39 @@ export function buildSystemPrompt({
   ]
     .filter((layer) => layer.length > 0)
     .join("\n\n---\n\n");
+}
+
+export async function loadProjectContext(
+  workspacePath: string,
+): Promise<string> {
+  const MAX = 10240;
+  const sections: string[] = [];
+
+  const tryRead = async (filePath: string, label: string) => {
+    try {
+      const content = await readFile(filePath, "utf8");
+      sections.push(`### ${label}\n${content}`);
+    } catch {
+      /* ignore missing files */
+    }
+  };
+
+  await tryRead(`${workspacePath}/CLAUDE.md`, "CLAUDE.md");
+  await tryRead(`${workspacePath}/AGENTS.md`, "AGENTS.md");
+
+  try {
+    const rulesDir = `${workspacePath}/.cursor/rules/`;
+    const files = await readdir(rulesDir);
+    for (const f of files.filter((f) => f.endsWith(".md"))) {
+      await tryRead(`${rulesDir}${f}`, f);
+    }
+  } catch {
+    /* ignore missing directory */
+  }
+
+  if (sections.length === 0) return "";
+  const combined = sections.join("\n\n");
+  return combined.length > MAX
+    ? combined.slice(0, MAX) + "\n... [truncated]"
+    : combined;
 }

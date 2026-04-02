@@ -1,5 +1,6 @@
 import { resolve, basename } from "node:path";
 import { loadConfig } from "../../config.js";
+import { loadProjectContext } from "../../harness/context-builder.js";
 import { routeTask } from "../../core/router.js";
 import { runClaudePipe } from "../../integrations/claude-p/claude-pipe.js";
 import { getDb } from "../../storage/db.js";
@@ -10,7 +11,9 @@ import {
 import {
   createTask,
   updateTaskStatus,
+  updateTaskTokens,
 } from "../../storage/repositories/tasks-repo.js";
+import { insertTelemetryEvent } from "../../storage/repositories/telemetry-repo.js";
 import { createAlibabaAdapter } from "../../harness/model-adapters/alibaba-adapter.js";
 import { classifyTask } from "../../core/classifier.js";
 import { withRetry } from "../../harness/model-adapters/with-retry.js";
@@ -104,8 +107,9 @@ export function registerRunCommand(program: import("commander").Command) {
           })();
         let workItemId: string | null = null;
         let taskId: string | null = null;
+        let db: ReturnType<typeof getDb> | null = null;
         try {
-          const db = getDb({ connectionString: connStr });
+          db = getDb({ connectionString: connStr });
           const wi = await createWorkItem(db, {
             title: prompt.slice(0, 120),
             description: prompt,
@@ -233,6 +237,8 @@ export function registerRunCommand(program: import("commander").Command) {
           });
           const adapter = withRetry(baseAdapter);
 
+          const db = taskId ? getDb({ connectionString: connStr }) : null;
+
           const sessionStore = await createProductionSessionStore(connStr);
 
           const sessionId = taskId ?? `session-${Date.now()}`;
@@ -244,10 +250,21 @@ export function registerRunCommand(program: import("commander").Command) {
             toolProfile: TOOL_PROFILE.full,
           });
 
+          const projectContext = await loadProjectContext(repoPath);
+
           const systemPrompt = [
-            `You are an expert software engineer working in the repository at ${repoPath}.`,
-            "Use the available tools to read, write, and modify files to complete the task.",
-            "Always read files before modifying them. Make minimal, targeted changes.",
+            `You are an autonomous coding agent working in the repository at ${repoPath}.`,
+            "",
+            "RULES — follow exactly:",
+            "1. NEVER explain what you plan to do. Use tools immediately.",
+            "2. Read files first, then write/edit. Never assume file contents.",
+            "3. You are NOT done until: all files are changed AND verification passes.",
+            "4. After every implementation, run: bash({command:'npx tsc --noEmit'}) then bash({command:'npx vitest run'}).",
+            "5. If a command fails, read the error, fix it, re-run. Never give up silently.",
+            "6. Do NOT return a text-only response until verification succeeds.",
+            ...(projectContext
+              ? ["", "## Project Context", projectContext]
+              : []),
           ].join("\n");
 
           const port = createQueryEnginePort({
@@ -283,24 +300,71 @@ export function registerRunCommand(program: import("commander").Command) {
                 const preview =
                   input.length > 60 ? input.slice(0, 57) + "..." : input;
                 process.stderr.write(`\n[tool] ${event.name}(${preview})\n`);
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: event.type,
+                    payload: { name: event.name, input: event.input },
+                  }).catch(() => {});
+                }
               } else if (event.type === "token_update") {
                 process.stderr.write(
                   `\r[tokens] ${event.used.toLocaleString()} / ${event.budget.toLocaleString()} (${event.percent}%)   `,
                 );
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: event.type,
+                    payload: {
+                      used: event.used,
+                      budget: event.budget,
+                      percent: event.percent,
+                    },
+                  }).catch(() => {});
+                  void updateTaskTokens(db, taskId, event.used).catch(() => {});
+                }
               } else if (event.type === "compaction") {
                 process.stderr.write(
                   `\n[compaction] ${event.messagesBefore} → ${event.messagesAfter} messages (pass ${event.compactionCount})\n`,
                 );
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: event.type,
+                    payload: {
+                      messagesBefore: event.messagesBefore,
+                      messagesAfter: event.messagesAfter,
+                    },
+                  }).catch(() => {});
+                }
               } else if (event.type === "api_retry") {
                 process.stderr.write(
                   `\n[retry] attempt ${event.attempt}/${event.maxAttempts} — ${event.error} (wait ${event.delayMs}ms)\n`,
                 );
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: event.type,
+                    payload: {
+                      attempt: event.attempt,
+                      maxAttempts: event.maxAttempts,
+                      error: event.error,
+                    },
+                  }).catch(() => {});
+                }
               } else if (event.type === "session_resume") {
                 process.stderr.write(
                   `\n⟳ Resuming session (pass ${event.resumeCount}/${MAX_RESUMES})\n`,
                 );
               } else if (event.type === "session_end") {
                 process.stderr.write("\n");
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: event.type,
+                    payload: { reason: event.reason },
+                  }).catch(() => {});
+                }
                 yield event.reason;
                 return;
               }

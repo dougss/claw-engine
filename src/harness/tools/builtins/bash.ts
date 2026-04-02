@@ -7,14 +7,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const bashTool: ToolHandler = {
   name: "bash",
-  description: "Execute a shell command",
+  description:
+    'Execute a shell command. Example: {"command": "npx tsc --noEmit"} or {"command": "ls src/", "cwd": "/some/path"}',
   inputSchema: {
     type: "object",
     properties: {
-      command: { type: "string" },
-      cwd: { type: "string" },
-      timeoutMs: { type: "number" },
-      background: { type: "boolean" },
+      command: {
+        type: "string",
+        description: "Shell command to run, e.g. npx tsc --noEmit",
+      },
+      cwd: {
+        type: "string",
+        description: "Working directory (defaults to workspace root)",
+      },
+      timeoutMs: {
+        type: "number",
+        description: "Timeout in milliseconds (default 30000)",
+      },
+      background: {
+        type: "boolean",
+        description: "Run in background without waiting (default false)",
+      },
     },
     required: ["command"],
   },

@@ -247,7 +247,8 @@ export function createAlibabaAdapter({
                   percent: Math.round((totalTokens / maxContext) * 100),
                 };
               }
-              yield { type: "session_end", reason: "completed" };
+              // Do NOT yield session_end here — session lifecycle is managed by
+              // the agent loop. The adapter's job ends when the stream ends.
               return;
             }
           }
@@ -255,8 +256,7 @@ export function createAlibabaAdapter({
       } finally {
         reader.releaseLock();
       }
-
-      yield { type: "session_end", reason: "completed" };
+      // Stream ended — agent loop decides what happens next.
     },
   };
 }

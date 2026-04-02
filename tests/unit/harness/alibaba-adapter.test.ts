@@ -70,10 +70,8 @@ describe("AlibabaAdapter", () => {
     const tokenUpdate = events.find((e) => e.type === "token_update");
     expect(tokenUpdate).toMatchObject({ type: "token_update", used: 15 });
 
-    expect(events[events.length - 1]).toEqual({
-      type: "session_end",
-      reason: "completed",
-    });
+    // Adapter no longer emits session_end — that is the agent loop's responsibility.
+    expect(events.every((e) => e.type !== "session_end")).toBe(true);
   });
 
   it("emits tool_use event when finish_reason is tool_calls", async () => {

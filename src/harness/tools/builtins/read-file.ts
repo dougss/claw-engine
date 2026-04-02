@@ -8,13 +8,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const readFileTool: ToolHandler = {
   name: "read_file",
-  description: "Read a text file",
+  description:
+    'Read a text file. Example: {"path": "src/foo.ts"} or {"path": "src/foo.ts", "offset": 10, "limit": 50}',
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string" },
-      offset: { type: "number" },
-      limit: { type: "number" },
+      path: {
+        type: "string",
+        description: "File path relative to workspace root, e.g. src/foo.ts",
+      },
+      offset: {
+        type: "number",
+        description: "Line number to start reading from (0-based)",
+      },
+      limit: { type: "number", description: "Maximum number of lines to read" },
     },
     required: ["path"],
   },

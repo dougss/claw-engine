@@ -8,12 +8,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const writeFileTool: ToolHandler = {
   name: "write_file",
-  description: "Write a text file (create/overwrite)",
+  description:
+    'Write (create or overwrite) a text file. Example: {"path": "src/foo.ts", "contents": "const x = 1;\\n"}',
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string" },
-      contents: { type: "string" },
+      path: {
+        type: "string",
+        description: "File path relative to workspace root, e.g. src/foo.ts",
+      },
+      contents: { type: "string", description: "Full file content to write" },
     },
     required: ["path", "contents"],
   },

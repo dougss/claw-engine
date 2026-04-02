@@ -73,6 +73,14 @@ export async function setTaskCheckpointData(
     .where(eq(tasks.id, taskId));
 }
 
+export async function updateTaskTokens(
+  db: Db,
+  id: string,
+  tokens: number,
+): Promise<void> {
+  await db.update(tasks).set({ tokensUsed: tokens }).where(eq(tasks.id, id));
+}
+
 export async function listTasksWithCheckpoint(db: Db): Promise<string[]> {
   const results = await db
     .select({ id: tasks.id })

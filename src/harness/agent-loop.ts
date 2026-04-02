@@ -114,6 +114,8 @@ export async function* runAgentLoop({
       { role: "user", content: userPrompt },
     ] as Message[]);
 
+  let everWrote = false; // tracks if any write/edit tool was ever called
+
   for (let i = 0; i < maxIterations; i++) {
     let sawToolUse = false;
     let assistantText = "";
@@ -133,6 +135,9 @@ export async function* runAgentLoop({
       if (event.type !== "tool_use") continue;
 
       sawToolUse = true;
+      if (["write_file", "edit_file", "bash"].includes(event.name)) {
+        everWrote = true;
+      }
 
       const handler = getToolHandler({ name: event.name, toolHandlers });
 
@@ -246,6 +251,24 @@ export async function* runAgentLoop({
     }
 
     if (!sawToolUse) {
+      // If the model hasn't written anything yet, it's not done — nudge it.
+      // Accept completion only after at least one write/edit/bash tool was used.
+      if (!everWrote && i < maxIterations - 1) {
+        const nudgesSoFar = messages.filter(
+          (m) =>
+            m.role === "user" &&
+            typeof m.content === "string" &&
+            m.content.startsWith("Stop explaining"),
+        ).length;
+        if (nudgesSoFar < 3) {
+          const nudge =
+            assistantText.trim().length > 0
+              ? "Stop explaining. Use the tools now to implement what you described. Do not write prose — call a tool."
+              : "You must use tools to implement the task. Call write_file or edit_file to make changes. Do not return without calling a tool.";
+          messages.push({ role: "user", content: nudge });
+          continue;
+        }
+      }
       yield { type: "session_end", reason: "completed" };
       return;
     }
