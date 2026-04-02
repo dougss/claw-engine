@@ -3,6 +3,9 @@ import {
   isToolUseEvent,
   isSessionEndEvent,
   isCompactionEvent,
+  isApiRetryEvent,
+  isModelFallbackEvent,
+  isSessionResumeEvent,
   createTextDelta,
   createTokenUpdate,
 } from "../../../src/harness/events.js";
@@ -43,5 +46,61 @@ describe("compaction event", () => {
     };
     expect(isCompactionEvent(event)).toBe(true);
     expect(isCompactionEvent({ type: "text_delta", text: "hi" })).toBe(false);
+  });
+});
+
+describe("api_retry event", () => {
+  it("isApiRetryEvent returns true for api_retry events", () => {
+    const event = {
+      type: "api_retry" as const,
+      attempt: 1,
+      maxAttempts: 5,
+      delayMs: 500,
+      error: "429 Too Many Requests",
+    };
+    expect(isApiRetryEvent(event)).toBe(true);
+    expect(isApiRetryEvent({ type: "text_delta", text: "hi" })).toBe(false);
+  });
+
+  it("api_retry event has correct shape", () => {
+    const event = {
+      type: "api_retry" as const,
+      attempt: 2,
+      maxAttempts: 5,
+      delayMs: 1000,
+      error: "ECONNRESET",
+    };
+    expect(event.attempt).toBe(2);
+    expect(event.maxAttempts).toBe(5);
+    expect(event.delayMs).toBe(1000);
+  });
+});
+
+describe("model_fallback event", () => {
+  it("isModelFallbackEvent returns true for model_fallback events", () => {
+    const event = {
+      type: "model_fallback" as const,
+      from: "qwen-plus",
+      to: "qwen-turbo",
+      reason: "rate_limit",
+    };
+    expect(isModelFallbackEvent(event)).toBe(true);
+    expect(isModelFallbackEvent({ type: "text_delta", text: "hi" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("session_resume event", () => {
+  it("isSessionResumeEvent returns true for session_resume events", () => {
+    const event = {
+      type: "session_resume" as const,
+      sessionId: "abc-123",
+      resumeCount: 1,
+    };
+    expect(isSessionResumeEvent(event)).toBe(true);
+    expect(isSessionResumeEvent({ type: "text_delta", text: "hi" })).toBe(
+      false,
+    );
   });
 });

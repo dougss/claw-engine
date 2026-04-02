@@ -20,7 +20,16 @@ export type HarnessEvent =
         | "error"
         | "max_iterations"
         | "interrupted";
-    };
+    }
+  | {
+      type: "api_retry";
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      error: string;
+    }
+  | { type: "model_fallback"; from: string; to: string; reason: string }
+  | { type: "session_resume"; sessionId: string; resumeCount: number };
 
 export function createTextDelta(text: string): HarnessEvent {
   return { type: "text_delta", text };
@@ -63,4 +72,22 @@ export function isCompactionEvent(
   event: HarnessEvent,
 ): event is HarnessEvent & { type: "compaction" } {
   return event.type === "compaction";
+}
+
+export function isApiRetryEvent(
+  event: HarnessEvent,
+): event is HarnessEvent & { type: "api_retry" } {
+  return event.type === "api_retry";
+}
+
+export function isModelFallbackEvent(
+  event: HarnessEvent,
+): event is HarnessEvent & { type: "model_fallback" } {
+  return event.type === "model_fallback";
+}
+
+export function isSessionResumeEvent(
+  event: HarnessEvent,
+): event is HarnessEvent & { type: "session_resume" } {
+  return event.type === "session_resume";
 }

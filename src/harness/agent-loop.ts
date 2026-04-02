@@ -61,6 +61,20 @@ function getToolHandler({
   return getTool(name);
 }
 
+const DEFAULT_MAX_RESULT_SIZE: Record<string, number> = {
+  bash: 100000,
+  grep: 50000,
+  glob: 20000,
+};
+const FALLBACK_MAX_RESULT_SIZE = 50000;
+
+function truncateOutput(output: string, maxChars: number): string {
+  if (output.length <= maxChars) return output;
+  return (
+    output.slice(0, maxChars) + `... [output truncated at ${maxChars} chars]`
+  );
+}
+
 async function executeTool({
   handler,
   input,
@@ -70,7 +84,12 @@ async function executeTool({
   input: unknown;
   context: ToolContext;
 }): Promise<ToolResult> {
-  return handler.execute(input, context);
+  const result = await handler.execute(input, context);
+  const maxChars =
+    handler.maxResultSizeChars ??
+    DEFAULT_MAX_RESULT_SIZE[handler.name] ??
+    FALLBACK_MAX_RESULT_SIZE;
+  return { ...result, output: truncateOutput(result.output, maxChars) };
 }
 
 export async function* runAgentLoop({

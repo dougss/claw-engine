@@ -191,6 +191,112 @@ describe("TranscriptStore", () => {
     expect(store.compactionCount).toBe(2);
   });
 
+  it("microcompact clears stale tool results when above threshold", () => {
+    const store = createTranscriptStore({
+      systemPrompt: "sys",
+      userPrompt: "hi",
+    });
+    for (let i = 0; i < 25; i++) {
+      store.addToolResult({
+        toolUseId: `t${i}`,
+        toolName: "bash",
+        output: `output ${i}`,
+      });
+    }
+
+    const result = store.microcompact(20);
+    expect(result.clearedCount).toBeGreaterThan(0);
+
+    const messages = store.getMessages();
+    const toolMessages = messages.filter((m) => m.role === "tool");
+    const cleared = toolMessages.filter(
+      (m) =>
+        m.content ===
+        "[Tool result cleared — stale content removed to save tokens]",
+    );
+    const kept = toolMessages.filter(
+      (m) =>
+        m.content !==
+        "[Tool result cleared — stale content removed to save tokens]",
+    );
+    expect(kept).toHaveLength(5);
+    expect(cleared.length).toBe(result.clearedCount);
+  });
+
+  it("microcompact returns 0 when below threshold", () => {
+    const store = createTranscriptStore({
+      systemPrompt: "sys",
+      userPrompt: "hi",
+    });
+    store.addToolResult({
+      toolUseId: "t1",
+      toolName: "bash",
+      output: "output",
+    });
+
+    const result = store.microcompact(20);
+    expect(result.clearedCount).toBe(0);
+
+    const messages = store.getMessages();
+    const toolMsg = messages.find((m) => m.role === "tool");
+    expect(toolMsg?.content).toBe("output");
+  });
+
+  it("microcompact does not affect system, user, or assistant messages", () => {
+    const store = createTranscriptStore({
+      systemPrompt: "system prompt",
+      userPrompt: "user prompt",
+    });
+    for (let i = 0; i < 25; i++) {
+      store.addAssistantMessage(`assistant msg ${i}`);
+      store.addToolResult({
+        toolUseId: `t${i}`,
+        toolName: "bash",
+        output: `tool output ${i}`,
+      });
+    }
+
+    store.microcompact(20);
+
+    const messages = store.getMessages();
+    const systemMsg = messages.find((m) => m.role === "system");
+    const userMsg = messages.find((m) => m.role === "user");
+    const assistantMsgs = messages.filter((m) => m.role === "assistant");
+
+    expect(systemMsg?.content).toBe("system prompt");
+    expect(userMsg?.content).toBe("user prompt");
+    expect(
+      assistantMsgs.every((m) => m.content.startsWith("assistant msg")),
+    ).toBe(true);
+  });
+
+  it("microcompact preserves the 5 most recent tool results unchanged", () => {
+    const store = createTranscriptStore({
+      systemPrompt: "sys",
+      userPrompt: "hi",
+    });
+    for (let i = 0; i < 25; i++) {
+      store.addToolResult({
+        toolUseId: `t${i}`,
+        toolName: "bash",
+        output: `output ${i}`,
+      });
+    }
+
+    store.microcompact(20);
+
+    const messages = store.getMessages();
+    const toolMessages = messages.filter((m) => m.role === "tool");
+    const lastFive = toolMessages.slice(-5);
+    expect(lastFive.map((m) => m.content)).toEqual([
+      "output 20",
+      "output 21",
+      "output 22",
+      "output 23",
+      "output 24",
+    ]);
+  });
+
   it("toSerializable/fromSerializable roundtrip", () => {
     const store = createTranscriptStore({
       systemPrompt: "sys",

@@ -12,7 +12,15 @@ import {
   updateTaskStatus,
 } from "../../storage/repositories/tasks-repo.js";
 import { createAlibabaAdapter } from "../../harness/model-adapters/alibaba-adapter.js";
-import { runAgentLoop } from "../../harness/agent-loop.js";
+import { classifyTask } from "../../core/classifier.js";
+import { withRetry } from "../../harness/model-adapters/with-retry.js";
+import { createQueryEnginePort } from "../../harness/query-engine-port.js";
+import {
+  createQueryEngineConfig,
+  TOOL_PROFILE,
+} from "../../harness/query-engine-config.js";
+import { DEFAULT_PERMISSION_RULES } from "../../harness/permissions.js";
+import { createProductionSessionStore } from "../../core/session-manager.js";
 import type { ToolHandler } from "../../harness/tools/tool-types.js";
 import { readFileTool } from "../../harness/tools/builtins/read-file.js";
 import { writeFileTool } from "../../harness/tools/builtins/write-file.js";
@@ -28,11 +36,21 @@ export function registerRunCommand(program: import("commander").Command) {
     .option("--model <model>", "Model to use (overrides router)")
     .option("--delegate", "Force delegate mode (claude -p)")
     .option("--dry-run", "Show plan without executing")
+    .option("--max-turns <n>", "Maximum agent turns", parseInt)
+    .option("--no-resume", "Disable auto-resume on checkpoint")
+    .option("--resume <sessionId>", "Resume a previous session by ID")
     .action(
       async (
         repo: string,
         prompt: string,
-        opts: { model?: string; delegate?: boolean; dryRun?: boolean },
+        opts: {
+          model?: string;
+          delegate?: boolean;
+          dryRun?: boolean;
+          maxTurns?: number;
+          resume?: boolean | string;
+          noResume?: boolean;
+        },
       ) => {
         const repoPath = resolve(repo);
 
@@ -42,9 +60,25 @@ export function registerRunCommand(program: import("commander").Command) {
         }
 
         const config = loadConfig();
+
+        // LLM-based classification — fast Qwen call (~50 tokens, 8s timeout).
+        // Falls back to "medium" on error so it never blocks execution.
+        let complexity: "simple" | "medium" | "complex" = "medium";
+        if (!opts.delegate) {
+          const apiKey =
+            process.env[config.providers.alibaba.api_key_env] ?? "";
+          if (apiKey) {
+            complexity = await classifyTask(prompt, {
+              apiKey,
+              baseUrl: config.providers.alibaba.base_url,
+              model: config.models.default,
+            });
+          }
+        }
+
         const route = routeTask(
           {
-            complexity: "medium",
+            complexity,
             description: prompt,
             fallbackChainPosition: 0,
             claudeBudgetPercent: 0,
@@ -54,6 +88,7 @@ export function registerRunCommand(program: import("commander").Command) {
 
         const mode = opts.delegate ? "delegate" : route.mode;
 
+        console.log(`classify → ${complexity}`);
         console.log(
           `routing → ${mode} mode (${opts.delegate ? "forced" : route.reason})`,
         );
@@ -84,7 +119,7 @@ export function registerRunCommand(program: import("commander").Command) {
             repo: basename(repoPath),
             branch,
             description: prompt,
-            complexity: "medium",
+            complexity,
             model:
               mode === "delegate"
                 ? (opts.model ?? "claude")
@@ -184,17 +219,29 @@ export function registerRunCommand(program: import("commander").Command) {
           const toolHandlers = new Map<string, ToolHandler>(
             builtins.map((t) => [t.name, t]),
           );
-          const tools = builtins.map((t) => ({
+          const toolDefinitions = builtins.map((t) => ({
             name: t.name,
             description: t.description,
             inputSchema: t.inputSchema,
           }));
 
-          const adapter = createAlibabaAdapter({
+          const baseAdapter = createAlibabaAdapter({
             name: "qwen-cli",
-            model: config.models.default,
+            model: opts.model ?? config.models.default,
             apiKey,
             baseUrl: config.providers.alibaba.base_url,
+          });
+          const adapter = withRetry(baseAdapter);
+
+          const sessionStore = await createProductionSessionStore(connStr);
+
+          const sessionId = taskId ?? `session-${Date.now()}`;
+          const engineConfig = createQueryEngineConfig({
+            maxTurns: opts.maxTurns ?? 200,
+            maxTokens: adapter.maxContext,
+            workspacePath: repoPath,
+            sessionId,
+            toolProfile: TOOL_PROFILE.full,
           });
 
           const systemPrompt = [
@@ -203,18 +250,32 @@ export function registerRunCommand(program: import("commander").Command) {
             "Always read files before modifying them. Make minimal, targeted changes.",
           ].join("\n");
 
+          const port = createQueryEnginePort({
+            config: engineConfig,
+            adapter,
+            systemPrompt,
+            tools: toolDefinitions,
+            sessionStore,
+            toolHandlers,
+            permissionRules: DEFAULT_PERMISSION_RULES,
+          });
+
+          const autoResume = opts.noResume !== true;
+          const MAX_RESUMES = 5;
+          let resumeCount = 0;
           let endReason = "completed";
-          try {
-            for await (const event of runAgentLoop({
-              adapter,
-              systemPrompt,
-              userPrompt: prompt,
-              tools,
-              toolHandlers,
-              workspacePath: repoPath,
-              maxIterations: 50,
-              tokenBudget: adapter.maxContext,
-            })) {
+
+          const manualResumeId =
+            typeof opts.resume === "string" ? opts.resume : null;
+
+          // Displays a single event to stdout/stderr. Returns the session_end
+          // reason if the event is a session_end, otherwise null.
+          async function* streamEvents(
+            source: AsyncGenerator<
+              import("../../harness/events.js").HarnessEvent
+            >,
+          ): AsyncGenerator<string | null> {
+            for await (const event of source) {
               if (event.type === "text_delta") {
                 process.stdout.write(event.text);
               } else if (event.type === "tool_use") {
@@ -226,19 +287,60 @@ export function registerRunCommand(program: import("commander").Command) {
                 process.stderr.write(
                   `\r[tokens] ${event.used.toLocaleString()} / ${event.budget.toLocaleString()} (${event.percent}%)   `,
                 );
+              } else if (event.type === "compaction") {
+                process.stderr.write(
+                  `\n[compaction] ${event.messagesBefore} → ${event.messagesAfter} messages (pass ${event.compactionCount})\n`,
+                );
+              } else if (event.type === "api_retry") {
+                process.stderr.write(
+                  `\n[retry] attempt ${event.attempt}/${event.maxAttempts} — ${event.error} (wait ${event.delayMs}ms)\n`,
+                );
+              } else if (event.type === "session_resume") {
+                process.stderr.write(
+                  `\n⟳ Resuming session (pass ${event.resumeCount}/${MAX_RESUMES})\n`,
+                );
               } else if (event.type === "session_end") {
-                endReason = event.reason;
                 process.stderr.write("\n");
-                if (event.reason === "completed") {
+                yield event.reason;
+                return;
+              }
+            }
+          }
+
+          try {
+            const initialStream = manualResumeId
+              ? port.resume(manualResumeId)
+              : port.run(prompt);
+
+            let currentStream = initialStream;
+
+            // Auto-resume loop: each checkpoint triggers a new resume pass
+            // until completed, error, or MAX_RESUMES exhausted.
+            while (true) {
+              let checkpointed = false;
+
+              for await (const reason of streamEvents(currentStream)) {
+                endReason = reason ?? endReason;
+
+                if (reason === "completed") {
                   console.log("\n✅ done");
-                } else if (event.reason === "checkpoint") {
-                  console.log(
-                    "\n📍 checkpoint — context limit reached, resuming...",
-                  );
+                } else if (reason === "checkpoint") {
+                  if (autoResume && resumeCount < MAX_RESUMES) {
+                    resumeCount++;
+                    console.log(
+                      `\n⟳ Checkpoint reached. Compacting and resuming... [pass ${resumeCount}/${MAX_RESUMES}]`,
+                    );
+                    checkpointed = true;
+                  } else {
+                    console.log("\n📍 checkpoint saved");
+                  }
                 } else {
-                  console.log(`\n⚠️  ended: ${event.reason}`);
+                  console.log(`\n⚠️  ended: ${reason}`);
                 }
               }
+
+              if (!checkpointed) break;
+              currentStream = port.resume(sessionId);
             }
           } catch (err) {
             endReason = "failed";

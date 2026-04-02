@@ -5,7 +5,11 @@ import type { ToolHandler } from "../harness/tools/tool-types.js";
 import type { PermissionRule } from "../harness/permissions.js";
 import { createQueryEngineConfig } from "../harness/query-engine-config.js";
 import { createQueryEnginePort } from "../harness/query-engine-port.js";
-import { createMemorySessionStore } from "../harness/session-store.js";
+import {
+  createMemorySessionStore,
+  createPostgresSessionStore,
+  type SessionStore,
+} from "../harness/session-store.js";
 
 /** Checkpoint data from a previous session used to resume work. */
 export interface ResumeCheckpoint {
@@ -13,6 +17,41 @@ export interface ResumeCheckpoint {
   summary: string;
   /** Recent messages for context continuity. */
   recentMessages?: Message[];
+}
+
+export async function createProductionSessionStore(
+  connectionString?: string,
+): Promise<SessionStore> {
+  if (!connectionString) {
+    console.warn(
+      "[session-manager] No DB connection string — using in-memory session store",
+    );
+    return createMemorySessionStore();
+  }
+
+  try {
+    const { getDb } = await import("../storage/db.js");
+    const {
+      getTaskCheckpointData,
+      setTaskCheckpointData,
+      listTasksWithCheckpoint,
+    } = await import("../storage/repositories/tasks-repo.js");
+
+    const db = getDb({ connectionString });
+
+    return createPostgresSessionStore({
+      getTaskCheckpointData: (taskId) => getTaskCheckpointData(db, taskId),
+      setTaskCheckpointData: (taskId, data) =>
+        setTaskCheckpointData(db, taskId, data),
+      listTasksWithCheckpoint: () => listTasksWithCheckpoint(db),
+    });
+  } catch (err) {
+    console.warn(
+      "[session-manager] DB unavailable — falling back to in-memory session store:",
+      err instanceof Error ? err.message : err,
+    );
+    return createMemorySessionStore();
+  }
 }
 
 export async function runSingleSession({
@@ -28,6 +67,7 @@ export async function runSingleSession({
   sessionId,
   permissionRules,
   mcpCallTool,
+  sessionStore,
 }: {
   adapter: ModelAdapter;
   systemPrompt: string;
@@ -41,6 +81,7 @@ export async function runSingleSession({
   sessionId?: string;
   permissionRules?: PermissionRule[];
   mcpCallTool?: (name: string, input: unknown) => Promise<ToolResult>;
+  sessionStore?: SessionStore;
 }): Promise<{ events: HarnessEvent[]; endReason: string }> {
   // Build effective system prompt: append checkpoint block if resuming
   let effectiveSystemPrompt = systemPrompt;
@@ -69,11 +110,11 @@ export async function runSingleSession({
     maxTokens: adapter.maxContext,
   });
 
-  const sessionStore = createMemorySessionStore();
+  const resolvedSessionStore = sessionStore ?? createMemorySessionStore();
   const port = createQueryEnginePort({
     config,
     adapter,
-    sessionStore,
+    sessionStore: resolvedSessionStore,
     systemPrompt: effectiveSystemPrompt,
     tools,
     toolHandlers,

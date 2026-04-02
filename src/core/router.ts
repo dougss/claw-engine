@@ -1,5 +1,6 @@
 import type { ClawEngineConfig } from "../config-schema.js";
 
+// description is kept in RouteInput for potential future use (logging, telemetry)
 interface RouteInput {
   complexity: "simple" | "medium" | "complex";
   description: string;
@@ -18,12 +19,7 @@ export function routeTask(
   input: RouteInput,
   config: ClawEngineConfig,
 ): RouteResult {
-  const {
-    complexity,
-    description,
-    fallbackChainPosition,
-    claudeBudgetPercent,
-  } = input;
+  const { complexity, fallbackChainPosition, claudeBudgetPercent } = input;
   const chain = config.models.fallback_chain;
 
   if (fallbackChainPosition > 0 && fallbackChainPosition < chain.length) {
@@ -63,47 +59,11 @@ export function routeTask(
     }
   }
 
-  if (complexity === "simple") {
-    return {
-      model: chain[0].model,
-      provider: chain[0].provider,
-      mode: chain[0].mode,
-      reason: "simple task → engine mode",
-    };
-  }
-
-  const score = computeKeywordScore(
-    description,
-    config.router.complexity_signals,
-  );
-  if (score > 0) {
-    const claudeTier = chain.find((t) => t.mode === "delegate");
-    if (claudeTier) {
-      return {
-        model: claudeTier.model,
-        provider: claudeTier.provider,
-        mode: claudeTier.mode,
-        reason: `keyword score ${score} > 0 → delegate`,
-      };
-    }
-  }
-
+  // simple and medium both go to engine mode (complexity is pre-classified by LLM)
   return {
     model: chain[0].model,
     provider: chain[0].provider,
     mode: chain[0].mode,
-    reason: `keyword score ${score} <= 0 → engine`,
+    reason: "engine mode",
   };
-}
-
-export function computeKeywordScore(
-  description: string,
-  signals: Record<string, number>,
-): number {
-  const lower = description.toLowerCase();
-  let score = 0;
-  for (const [keyword, weight] of Object.entries(signals)) {
-    if (lower.includes(keyword)) score += weight;
-  }
-  return score;
 }

@@ -193,6 +193,7 @@ async function* orchestrate({
 
   while (passCount < MAX_COMPACTION_PASSES) {
     passCount += 1;
+    transcript.microcompact();
     const isLastPass = passCount >= MAX_COMPACTION_PASSES;
 
     const checkpointPercent = isLastPass
