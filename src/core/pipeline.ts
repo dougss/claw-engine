@@ -35,6 +35,7 @@ export interface PipelineContext {
   githubPrivateKeyPath?: string;
   /** GitHub bot user ID — used to build the noreply commit email (e.g. 12345+claw-engine[bot]@...). */
   githubBotUserId?: string;
+  maxReviewRetries?: number;  // default 1
   defaultBranch?: string;
 }
 
@@ -44,6 +45,7 @@ export interface PipelineResult {
   validation: ValidationResult;
   review: string;
   prUrl: string | null;
+  reviewPassed: boolean;
 }
 
 const GIT_EXEC_TIMEOUT_MS = 300_000;
@@ -79,7 +81,7 @@ function gitCommitAndPush(repoPath: string, prompt: string): string {
   const opts = gitExecSyncOptions(repoPath);
 
   const status = execSync("git status --porcelain", opts).trim();
-  if (!status) return execSync("git rev-parse --abbrev-ref HEAD", opts).trim();
+  if (!status) throw new Error('nothing to commit — working tree is clean');
 
   const currentBranch = execSync(
     "git rev-parse --abbrev-ref HEAD",
@@ -89,7 +91,8 @@ function gitCommitAndPush(repoPath: string, prompt: string): string {
     throw new Error("Cannot commit from detached HEAD state");
   }
   let branch = currentBranch;
-  if (currentBranch === "main" || currentBranch === "master") {
+  const defaultBranch = getDefaultBranch(repoPath);
+  if (currentBranch === defaultBranch || currentBranch === "HEAD") {
     branch = `claw/run-${Date.now()}`;
     execSync(`git checkout -b ${branch}`, opts);
   }
@@ -399,6 +402,35 @@ export async function prPhase({
   }
 }
 
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+
+function parseReviewVerdict(review: string): 'APPROVE' | 'REQUEST_CHANGES' {
+  const upper = review.toUpperCase();
+  // Look for explicit APPROVE anywhere — check APPROVE before REQUEST_CHANGES
+  // to avoid false-match on \"not APPROVE\"
+  if (upper.includes('VERDICT') && upper.includes('REQUEST_CHANGES')) {
+    return 'REQUEST_CHANGES';
+  }
+  if (upper.includes('VERDICT') && upper.includes('APPROVE')) {
+    return 'APPROVE';
+  }
+  // Fallback: last line heuristic
+  const lastLines = review.trim().split('\n').slice(-5).join(' ').toUpperCase();
+  if (lastLines.includes('REQUEST_CHANGES')) return 'REQUEST_CHANGES';
+  return 'APPROVE'; // default to approve if unclear
+}
+
+function getDefaultBranch(repoPath: string): string {
+  try {
+    const ref = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
+      cwd: repoPath, encoding: 'utf-8'
+    }).trim();
+    return ref.replace('refs/remotes/origin/', '');
+  } catch {
+    return 'main'; // fallback
+  }
+}
+
 // ── ORCHESTRATOR ──────────────────────────────────────────────────────────────
 
 interface RunPipelineInput extends PipelineContext {
@@ -427,6 +459,7 @@ export async function runPipeline(
     defaultBranch,
   } = input;
   const validationSteps = config.validation.typescript;
+  const maxReviewRetries = input.maxReviewRetries ?? 1;
 
   // ── GitHub App auth ───────────────────────────────────────────────────────
   // If all three GitHub App fields are provided, obtain an installation token,
@@ -514,26 +547,76 @@ export async function runPipeline(
   }
 
   if (!executeSuccess) {
-    return { plan, executeSuccess: false, validation, review: "", prUrl: null };
+    return { plan, executeSuccess: false, validation, review: "", prUrl: null, reviewPassed: false };
   }
 
-  const review = await reviewPhase({
-    repoPath,
-    prompt,
-    claudeBin,
-    onEvent,
-    getDiff: input.getDiff,
-  });
+  let review = '';
+  let prUrl: string | null = null;
+  let reviewPassed = false;
+  let reviewAttempt = 0;
+  const executeAttemptOffset = maxRetries + 1; // continue numbering from where validate left off
 
+  while (reviewAttempt <= maxReviewRetries) {
+    reviewAttempt++;
+
+    review = await reviewPhase({
+      repoPath,
+      prompt,
+      claudeBin,
+      onEvent,
+      getDiff: input.getDiff,
+    });
+
+    const verdict = parseReviewVerdict(review);
+
+    if (verdict === 'APPROVE' || reviewAttempt > maxReviewRetries) {
+      reviewPassed = verdict === 'APPROVE';
+      break;
+    }
+
+    // REQUEST_CHANGES — loop back: execute to fix, then validate
+    console.log(`[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`);
+
+    await executePhase({
+      repoPath,
+      prompt,
+      plan,
+      previousError: `Code review requested changes:\n${review}`,
+      opencodeBin,
+      opencodeModel,
+      onEvent,
+      attempt: executeAttemptOffset + reviewAttempt,
+    });
+
+    const fixValidation = await validatePhase({
+      repoPath,
+      validationSteps,
+      onEvent,
+      execCommand: input.execCommand,
+      attempt: executeAttemptOffset + reviewAttempt,
+    });
+
+    if (!fixValidation.passed) {
+      // Validation failed after review fix — abort
+      return { plan, executeSuccess: false, validation: fixValidation, review, prUrl: null, reviewPassed: false };
+    }
+  }
+
+  // Commit, push, PR
   let prBranch: string | undefined;
   if (openPr) {
     try {
       prBranch = gitCommitAndPush(repoPath, prompt);
     } catch (err: any) {
+      if (err.message.includes('nothing to commit')) {
+        console.log('[pipeline] nothing to commit, skipping PR');
+        return { plan, executeSuccess: true, validation, review, prUrl: null, reviewPassed };
+      }
       throw new Error(`Failed to commit/push for PR: ${err.message}`);
     }
   }
 
+  const defaultBranch = getDefaultBranch(repoPath);
   const prBase = defaultBranch ?? resolveDefaultBranch(repoPath);
 
   const prUrl = await prPhase({
@@ -547,5 +630,5 @@ export async function runPipeline(
     baseBranch: prBase,
   });
 
-  return { plan, executeSuccess: true, validation, review, prUrl };
+  return { plan, executeSuccess: true, validation, review, prUrl, reviewPassed };
 }

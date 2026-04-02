@@ -112,6 +112,7 @@ describe("pipeline types", () => {
       validation: { passed: true, steps: [] },
       review: "looks good",
       prUrl: null,
+      reviewPassed: true,
     };
     expect(result.plan).toBe("the plan");
     expect(result.prUrl).toBeNull();
