@@ -1,49 +1,36 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { taskCreateTool, taskListTool, taskUpdateTool, taskGetTool, __overrideGetDatabaseConnection } from "../../../src/harness/tools/builtins/task-tools.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  taskCreateTool,
+  taskListTool,
+  taskUpdateTool,
+  taskGetTool,
+} from "../../../src/harness/tools/builtins/task-tools.js";
 import { randomUUID } from "node:crypto";
 
-// Mock the database functions
-vi.mock("../../../src/storage/db.js", () => {
-  return {
-    getDb: vi.fn(() => mockDb),
-  };
-});
+const mockDb = {};
 
-vi.mock("../../../src/storage/repositories/tasks-repo.js", async () => {
-  return {
-    createTask: vi.fn((db, input) => mockCreateTask(db, input)),
-    getTaskById: vi.fn((db, id) => mockGetTaskById(db, id)),
-    getTasksByWorkItemId: vi.fn((db, workItemId) => mockGetTasksByWorkItemId(db, workItemId)),
-    updateTaskStatus: vi.fn((db, id, status) => mockUpdateTaskStatus(db, id, status)),
-  };
-});
+vi.mock("../../../src/storage/db.js", () => ({
+  getDb: vi.fn(() => mockDb),
+}));
 
-vi.mock("../../../src/storage/repositories/work-items-repo.js", () => {
-  return {
-    createWorkItem: vi.fn((db, input) => mockCreateWorkItem(db, input)),
-    getWorkItemById: vi.fn((db, id) => mockGetWorkItemById(db, id)),
-  };
-});
+vi.mock("../../../src/storage/repositories/tasks-repo.js", () => ({
+  createTask: vi.fn((db, input) => mockCreateTask(db, input)),
+  getTaskById: vi.fn((db, id) => mockGetTaskById(db, id)),
+  getTasksByWorkItemId: vi.fn((db, workItemId) =>
+    mockGetTasksByWorkItemId(db, workItemId),
+  ),
+  updateTaskStatus: vi.fn((db, id, status) =>
+    mockUpdateTaskStatus(db, id, status),
+  ),
+  getTaskCheckpointData: vi.fn((db, id) => mockGetTaskCheckpointData(db, id)),
+  setTaskCheckpointData: vi.fn((db, id, data) =>
+    mockSetTaskCheckpointData(db, id, data),
+  ),
+}));
 
-// Mock implementations
-const mockDb = {
-  execute: vi.fn(),
-  select: vi.fn(),
-  update: vi.fn(() => ({
-    set: vi.fn(() => ({
-      where: vi.fn(() => Promise.resolve([]))
-    }))
-  })),
-  sql: vi.fn((strings, ...params) => ({ strings, params })),
-};
+const mockTasks = new Map<string, any>();
 
-const mockTasks = new Map();
-const mockWorkItems = new Map(); // Map of workItemId -> workItem
-const mockSessionWorkItems = new Map(); // Map of sessionId -> workItemId
-
-let nextId = 1;
-
-const mockCreateTask = (db: any, input: any) => {
+const mockCreateTask = (_db: any, input: any) => {
   const id = randomUUID();
   const task = {
     id,
@@ -53,7 +40,8 @@ const mockCreateTask = (db: any, input: any) => {
     description: input.description,
     complexity: input.complexity,
     dagNodeId: input.dagNodeId,
-    status: input.status || "pending",
+    status: "pending",
+    checkpointData: null,
     createdAt: new Date(),
     startedAt: null,
     completedAt: null,
@@ -62,111 +50,48 @@ const mockCreateTask = (db: any, input: any) => {
   return Promise.resolve(task);
 };
 
-const mockGetTaskById = (db: any, id: string) => {
-  return Promise.resolve(mockTasks.get(id) || null);
-};
+const mockGetTaskById = (_db: any, id: string) =>
+  Promise.resolve(mockTasks.get(id) ?? null);
 
-const mockGetTasksByWorkItemId = (db: any, workItemId: string) => {
-  const tasks = Array.from(mockTasks.values()).filter(task => task.workItemId === workItemId);
-  return Promise.resolve(tasks);
-};
+const mockGetTasksByWorkItemId = (_db: any, workItemId: string) =>
+  Promise.resolve(
+    Array.from(mockTasks.values()).filter((t) => t.workItemId === workItemId),
+  );
 
-const mockUpdateTaskStatus = (db: any, id: string, status: string) => {
+const mockUpdateTaskStatus = (_db: any, id: string, status: string) => {
   const task = mockTasks.get(id);
-  if (task) {
-    task.status = status;
-  }
+  if (task) task.status = status;
   return Promise.resolve(task);
 };
 
-const mockCreateWorkItem = (db: any, input: any) => {
-  const id = `workitem-${nextId++}`;
-  const workItem = {
-    id,
-    title: input.title,
-    description: input.description,
-    repos: input.repos,
-    source: input.source,
-  };
-  mockWorkItems.set(id, workItem);
-  // Store the session mapping
-  if (input.title.includes('session:')) {
-    const sessionId = input.title.split(':')[1]; // Extract session ID from "Tasks for session:{sessionId}"
-    mockSessionWorkItems.set(sessionId, id);
-  }
-  return Promise.resolve(workItem);
+const mockGetTaskCheckpointData = (_db: any, id: string) => {
+  const task = mockTasks.get(id);
+  return Promise.resolve(task?.checkpointData ?? null);
 };
 
-const mockGetWorkItemById = (db: any, id: string) => {
-  return Promise.resolve(mockWorkItems.get(id) || null);
+const mockSetTaskCheckpointData = (_db: any, id: string, data: any) => {
+  const task = mockTasks.get(id);
+  if (task) task.checkpointData = data;
+  return Promise.resolve();
 };
 
 describe("Task Tools", () => {
   const mockContext = {
     workspacePath: "/tmp/test",
     sessionId: "session-test-123",
+    workItemId: "workitem-test-abc",
   };
 
   beforeEach(() => {
-    // Set up the database connection override
-    __overrideGetDatabaseConnection(() => mockDb);
-    
-    // Clear mocks and data
     vi.clearAllMocks();
     mockTasks.clear();
-    mockWorkItems.clear();
-    nextId = 1;
-    
-    // Set up the execute method to return a work item
-    mockDb.execute.mockImplementation((query: any) => {
-      if (typeof query === 'object' && query.strings && query.strings[0]?.includes('work_items')) {
-        return Promise.resolve({ rowCount: 0, rows: [] });
-      }
-      return Promise.resolve({ rowCount: 0, rows: [] });
-    });
-    
-    // Mock the select method to simulate Drizzle ORM behavior
-    // We need to make it return the right value based on the session
-    mockDb.select = vi.fn(function(columns) {
-      return {
-        from: vi.fn(() => ({
-          where: vi.fn((conditionObj) => ({
-            orderBy: vi.fn(() => ({
-              limit: vi.fn(() => {
-                // Look for work item matching the current session
-                const workItemId = mockSessionWorkItems.get(mockContext.sessionId);
-                if (workItemId) {
-                  // Return the existing work item
-                  return Promise.resolve([{ id: workItemId }]);
-                } else {
-                  // No work item found for this session
-                  return Promise.resolve([]);
-                }
-              })
-            }))
-          }))
-        }))
-      };
-    });
-    
-    // Also need to mock the update method properly
-    mockDb.update = vi.fn((table) => ({
-      set: vi.fn((values) => ({
-        where: vi.fn(() => Promise.resolve([]))
-      }))
-    }));
-  });
-
-  afterEach(() => {
-    // Reset the override after each test
-    __overrideGetDatabaseConnection(null as any);
   });
 
   describe("task_create", () => {
     it("should create a new task with minimal input", async () => {
       const result = await taskCreateTool.execute(
         { subject: "Test task" },
-        mockContext
+        mockContext,
       );
 
       expect(result.isError).toBe(false);
@@ -178,12 +103,12 @@ describe("Task Tools", () => {
 
     it("should create a task with description and status", async () => {
       const result = await taskCreateTool.execute(
-        { 
-          subject: "Test task", 
-          description: "This is a test task", 
-          status: "in_progress" 
+        {
+          subject: "Test task",
+          description: "This is a test task",
+          status: "in_progress",
         },
-        mockContext
+        mockContext,
       );
 
       expect(result.isError).toBe(false);
@@ -192,19 +117,43 @@ describe("Task Tools", () => {
       expect(output.status).toBe("in_progress");
     });
 
+    it("should store subject in description column, not JSON", async () => {
+      await taskCreateTool.execute({ subject: "Plain subject" }, mockContext);
+      const stored = Array.from(mockTasks.values())[0];
+      expect(stored.description).toBe("Plain subject");
+    });
+
+    it("should store agentDescription in checkpointData", async () => {
+      await taskCreateTool.execute(
+        { subject: "Task", description: "Detailed desc" },
+        mockContext,
+      );
+      const stored = Array.from(mockTasks.values())[0];
+      expect(stored.checkpointData).toEqual({
+        agentDescription: "Detailed desc",
+      });
+    });
+
     it("should return error for invalid input", async () => {
       const result = await taskCreateTool.execute(
         { description: "Missing subject" },
-        mockContext
+        mockContext,
       );
-
       expect(result.isError).toBe(true);
+    });
+
+    it("should return error when workItemId is missing from context", async () => {
+      const result = await taskCreateTool.execute(
+        { subject: "Task" },
+        { workspacePath: "/tmp", sessionId: "s1" },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.output).toMatch(/workItemId/);
     });
   });
 
   describe("task_list", () => {
     it("should list all tasks", async () => {
-      // Create some test tasks
       await taskCreateTool.execute({ subject: "Task 1" }, mockContext);
       await taskCreateTool.execute({ subject: "Task 2" }, mockContext);
 
@@ -217,12 +166,31 @@ describe("Task Tools", () => {
       expect(output.some((t: any) => t.subject === "Task 2")).toBe(true);
     });
 
-    it("should filter tasks by status", async () => {
-      // Create tasks with different statuses
-      await taskCreateTool.execute({ subject: "Task 1", status: "pending" }, mockContext);
-      await taskCreateTool.execute({ subject: "Task 2", status: "completed" }, mockContext);
+    it("should include description from checkpointData when present", async () => {
+      await taskCreateTool.execute(
+        { subject: "Task", description: "My desc" },
+        mockContext,
+      );
 
-      const result = await taskListTool.execute({ status: "completed" }, mockContext);
+      const result = await taskListTool.execute({}, mockContext);
+      const output = JSON.parse(result.output);
+      expect(output[0].description).toBe("My desc");
+    });
+
+    it("should filter tasks by status", async () => {
+      await taskCreateTool.execute(
+        { subject: "Task 1", status: "pending" },
+        mockContext,
+      );
+      await taskCreateTool.execute(
+        { subject: "Task 2", status: "completed" },
+        mockContext,
+      );
+
+      const result = await taskListTool.execute(
+        { status: "completed" },
+        mockContext,
+      );
 
       expect(result.isError).toBe(false);
       const output = JSON.parse(result.output);
@@ -231,9 +199,15 @@ describe("Task Tools", () => {
     });
 
     it("should return empty array when no tasks match filter", async () => {
-      await taskCreateTool.execute({ subject: "Task 1", status: "pending" }, mockContext);
+      await taskCreateTool.execute(
+        { subject: "Task 1", status: "pending" },
+        mockContext,
+      );
 
-      const result = await taskListTool.execute({ status: "completed" }, mockContext);
+      const result = await taskListTool.execute(
+        { status: "completed" },
+        mockContext,
+      );
 
       expect(result.isError).toBe(false);
       const output = JSON.parse(result.output);
@@ -243,17 +217,15 @@ describe("Task Tools", () => {
 
   describe("task_update", () => {
     it("should update task status", async () => {
-      // Create a task first
       const createResult = await taskCreateTool.execute(
         { subject: "Test task", status: "pending" },
-        mockContext
+        mockContext,
       );
       const task = JSON.parse(createResult.output);
 
-      // Update the task
       const updateResult = await taskUpdateTool.execute(
         { id: task.id, status: "completed" },
-        mockContext
+        mockContext,
       );
 
       expect(updateResult.isError).toBe(false);
@@ -261,35 +233,56 @@ describe("Task Tools", () => {
       expect(updatedTask.status).toBe("completed");
     });
 
-    it("should update task description", async () => {
-      // Create a task first
+    it("should return subject (not JSON) from description column", async () => {
       const createResult = await taskCreateTool.execute(
-        { subject: "Test task", description: "Original description" },
-        mockContext
+        { subject: "My Subject" },
+        mockContext,
       );
       const task = JSON.parse(createResult.output);
 
-      // Update the task description
       const updateResult = await taskUpdateTool.execute(
-        { id: task.id, description: "Updated description" },
-        mockContext
+        { id: task.id, status: "in_progress" },
+        mockContext,
       );
 
       expect(updateResult.isError).toBe(false);
+      const updatedTask = JSON.parse(updateResult.output);
+      expect(updatedTask.subject).toBe("My Subject");
     });
 
-    it("should update both status and description", async () => {
-      // Create a task first
+    it("should update agentDescription in checkpointData", async () => {
       const createResult = await taskCreateTool.execute(
-        { subject: "Test task", status: "pending", description: "Original" },
-        mockContext
+        { subject: "Test task", description: "Original description" },
+        mockContext,
       );
       const task = JSON.parse(createResult.output);
 
-      // Update both fields
       const updateResult = await taskUpdateTool.execute(
-        { id: task.id, status: "in_progress", description: "Updated description" },
-        mockContext
+        { id: task.id, description: "Updated description" },
+        mockContext,
+      );
+
+      expect(updateResult.isError).toBe(false);
+      const stored = mockTasks.get(task.id);
+      expect(stored.checkpointData.agentDescription).toBe(
+        "Updated description",
+      );
+    });
+
+    it("should update both status and description", async () => {
+      const createResult = await taskCreateTool.execute(
+        { subject: "Test task", status: "pending", description: "Original" },
+        mockContext,
+      );
+      const task = JSON.parse(createResult.output);
+
+      const updateResult = await taskUpdateTool.execute(
+        {
+          id: task.id,
+          status: "in_progress",
+          description: "Updated description",
+        },
+        mockContext,
       );
 
       expect(updateResult.isError).toBe(false);
@@ -300,26 +293,27 @@ describe("Task Tools", () => {
     it("should return error for non-existent task", async () => {
       const result = await taskUpdateTool.execute(
         { id: "non-existent-id", status: "completed" },
-        mockContext
+        mockContext,
       );
-
       expect(result.isError).toBe(true);
     });
   });
 
   describe("task_get", () => {
     it("should retrieve a task by ID", async () => {
-      // Create a task first
       const createResult = await taskCreateTool.execute(
-        { subject: "Test task", description: "A detailed description", status: "in_progress" },
-        mockContext
+        {
+          subject: "Test task",
+          description: "A detailed description",
+          status: "in_progress",
+        },
+        mockContext,
       );
       const createdTask = JSON.parse(createResult.output);
 
-      // Get the task
       const getResult = await taskGetTool.execute(
         { id: createdTask.id },
-        mockContext
+        mockContext,
       );
 
       expect(getResult.isError).toBe(false);
@@ -330,12 +324,28 @@ describe("Task Tools", () => {
       expect(retrievedTask.description).toBe("A detailed description");
     });
 
+    it("should return null description when not set", async () => {
+      const createResult = await taskCreateTool.execute(
+        { subject: "No desc task" },
+        mockContext,
+      );
+      const createdTask = JSON.parse(createResult.output);
+
+      const getResult = await taskGetTool.execute(
+        { id: createdTask.id },
+        mockContext,
+      );
+
+      expect(getResult.isError).toBe(false);
+      const retrievedTask = JSON.parse(getResult.output);
+      expect(retrievedTask.description).toBeNull();
+    });
+
     it("should return error for non-existent task", async () => {
       const result = await taskGetTool.execute(
         { id: "non-existent-id" },
-        mockContext
+        mockContext,
       );
-
       expect(result.isError).toBe(true);
     });
   });

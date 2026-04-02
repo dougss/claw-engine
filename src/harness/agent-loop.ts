@@ -31,6 +31,7 @@ export interface RunAgentLoopInput {
   workspacePath: string;
   toolHandlers?: Map<string, ToolHandler>;
   sessionId?: string;
+  workItemId?: string;
   /** Percent of context window at which a checkpoint is triggered. Default: 85. */
   checkpointThresholdPercent?: number;
   permissionRules?: PermissionRule[];
@@ -112,6 +113,7 @@ export async function* runAgentLoop({
   workspacePath,
   toolHandlers,
   sessionId = "test-session",
+  workItemId,
   checkpointThresholdPercent = 85,
   permissionRules = DEFAULT_PERMISSION_RULES,
   mcpCallTool,
@@ -233,7 +235,7 @@ export async function* runAgentLoop({
         const result = await executeTool({
           handler,
           input: event.input,
-          context: { workspacePath, sessionId },
+          context: { workspacePath, sessionId, workItemId },
         });
 
         yield {

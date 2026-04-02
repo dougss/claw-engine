@@ -181,6 +181,7 @@ async function* orchestrate({
     workspacePath: config.workspacePath,
     toolHandlers: resolvedHandlers,
     sessionId: config.sessionId,
+    workItemId: config.workItemId,
     permissionRules,
     mcpCallTool,
   } as const;

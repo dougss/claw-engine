@@ -3,6 +3,7 @@ import type { ToolResult } from "../../types.js";
 export interface ToolContext {
   workspacePath: string;
   sessionId: string;
+  workItemId?: string;
   onAskUser?: (question: string) => Promise<string>;
 }
 

@@ -33,6 +33,7 @@ export interface QueryEngineConfig {
 
   workspacePath: string;
   sessionId: string;
+  workItemId?: string;
 }
 
 export const DEFAULT_QUERY_ENGINE_CONFIG = {
@@ -82,6 +83,7 @@ export function createQueryEngineConfig(
     workspacePath:
       overrides.workspacePath ?? DEFAULT_QUERY_ENGINE_CONFIG.workspacePath,
     sessionId: overrides.sessionId ?? DEFAULT_QUERY_ENGINE_CONFIG.sessionId,
+    workItemId: overrides.workItemId,
   };
 
   if (config.maxTurns <= 0) {
