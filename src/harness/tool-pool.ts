@@ -22,6 +22,7 @@ export const TOOL_PROFILES: Record<string, string[]> = {
     "spawn_agent",
     "enter_worktree",
     "exit_worktree",
+    "notebook_edit",
   ],
   [TOOL_PROFILE.simple]: ["read_file", "glob", "grep", "ask_user"],
   [TOOL_PROFILE.readonly]: ["read_file", "glob", "grep"],
