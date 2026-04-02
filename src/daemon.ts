@@ -3,10 +3,8 @@ loadDefaultEnvFiles();
 import { createServer } from "./server.js";
 import { reconcileOnStartup } from "./core/reconcile.js";
 import { closeDb } from "./storage/db.js";
-import {
-  checkSessionHealth,
-  type SessionHealth,
-} from "./core/health-monitor.js";
+import { checkSessionHealth } from "./core/health-monitor.js";
+import { activeSessionRegistry } from "./core/session-registry.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -44,15 +42,17 @@ async function main(): Promise<void> {
     `[claw-engine] listening on ${config.engine.host}:${config.engine.port}`,
   );
 
-  // Periodic health check — sessions register themselves here as they start
-  const activeSessions = new Map<string, SessionHealth>();
+  // Periodic health check — sessions register themselves via session-registry
   const healthCheckInterval = setInterval(() => {
-    for (const [, session] of activeSessions) {
-      const result = checkSessionHealth(session);
+    for (const [sessionId, entry] of activeSessionRegistry) {
+      const result = checkSessionHealth(entry.health);
       if (result.action === "kill") {
         console.warn(
-          `[health-monitor] stalled session detected: ${result.sessionId} — ${result.reason}`,
+          `[health-monitor] killing stalled session ${result.sessionId} — ${result.reason}`,
         );
+        entry.abort();
+        activeSessionRegistry.delete(sessionId);
+        // TODO: if the session was started from a BullMQ job, mark that job as failed here
       }
     }
   }, 30_000);

@@ -1,53 +1,76 @@
-// Orchestration loop — 13-step skeleton (Task 19 will implement each step)
+// Orchestration loop — 13-step pipeline for task execution.
+// Each step is a stub to be implemented in Task 19.
 
-export function receive_task(): void {
-  console.log("// TODO: Task 19");
+export async function receiveTask(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: receiveTask");
 }
 
-export function classify_complexity(): void {
-  console.log("// TODO: Task 19");
+export async function classifyComplexity(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: classifyComplexity");
 }
 
-export function route_model(): void {
-  console.log("// TODO: Task 19");
+export async function routeModel(_ctx: Record<string, unknown>): Promise<void> {
+  console.log("TODO Task 19: routeModel");
 }
 
-export function provision_workspace(): void {
-  console.log("// TODO: Task 19");
+export async function provisionWorkspace(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: provisionWorkspace");
 }
 
-export function load_context(): void {
-  console.log("// TODO: Task 19");
+export async function loadContext(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: loadContext");
 }
 
-export function build_prompt(): void {
-  console.log("// TODO: Task 19");
+export async function buildPrompt(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: buildPrompt");
 }
 
-export function run_agent(): void {
-  console.log("// TODO: Task 19");
+export async function runAgent(_ctx: Record<string, unknown>): Promise<void> {
+  console.log("TODO Task 19: runAgent");
 }
 
-export function handle_checkpoint(): void {
-  console.log("// TODO: Task 19");
+export async function handleCheckpoint(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: handleCheckpoint");
 }
 
-export function run_validation(): void {
-  console.log("// TODO: Task 19");
+export async function runValidationStep(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: runValidation");
 }
 
-export function evaluate_result(): void {
-  console.log("// TODO: Task 19");
+export async function evaluateResult(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: evaluateResult");
 }
 
-export function handle_failure(): void {
-  console.log("// TODO: Task 19");
+export async function handleFailure(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: handleFailure");
 }
 
-export function finalize_session(): void {
-  console.log("// TODO: Task 19");
+export async function finalizeSession(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: finalizeSession");
 }
 
-export function emit_completion(): void {
-  console.log("// TODO: Task 19");
+export async function emitCompletion(
+  _ctx: Record<string, unknown>,
+): Promise<void> {
+  console.log("TODO Task 19: emitCompletion");
 }

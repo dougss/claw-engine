@@ -14,10 +14,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { exec } from "node:child_process";
 import { runValidation } from "./validation-runner.js";
-import {
-  registerSession,
-  unregisterSession,
-} from "./session-registry.js";
+import { registerSession, unregisterSession } from "./session-registry.js";
 import type { SessionHealth } from "./health-monitor.js";
 
 /** Checkpoint data from a previous session used to resume work. */
@@ -109,10 +106,12 @@ export async function runSingleSession({
     effectiveSystemPrompt = systemPrompt + checkpointBlock;
   }
 
+  const resolvedSessionId = sessionId ?? `session-${Date.now()}`;
+
   const config = createQueryEngineConfig({
     maxTurns: maxIterations,
     workspacePath,
-    sessionId: sessionId ?? `session-${Date.now()}`,
+    sessionId: resolvedSessionId,
     checkpointThreshold: checkpointThresholdPercent
       ? checkpointThresholdPercent / 100
       : undefined,
@@ -131,41 +130,74 @@ export async function runSingleSession({
     mcpCallTool,
   });
 
+  const abortController = new AbortController();
+
+  const healthRecord: SessionHealth = {
+    sessionId: resolvedSessionId,
+    lastOutputAt: new Date(),
+    mode: "engine",
+    tokensUsed: 0,
+    tokenBudget: adapter.maxContext ?? 100_000,
+    workspacePath,
+  };
+
+  registerSession(resolvedSessionId, {
+    health: healthRecord,
+    abort: () => abortController.abort(),
+  });
+
   const events: HarnessEvent[] = [];
   let endReason = "unknown";
 
-  for await (const event of port.run(userPrompt)) {
-    events.push(event);
-    if (event.type === "session_end") {
-      endReason = event.reason;
+  try {
+    for await (const event of port.run(userPrompt)) {
+      if (abortController.signal.aborted) {
+        endReason = "interrupted";
+        break;
+      }
+      events.push(event);
+      healthRecord.lastOutputAt = new Date();
+      if (event.type === "token_update") {
+        healthRecord.tokensUsed = event.used;
+        healthRecord.tokenBudget = event.budget;
+      }
+      if (event.type === "session_end") {
+        endReason = event.reason;
+      }
     }
-  }
 
-  if (endReason === "completed") {
-    const hasPackageJson = existsSync(join(workspacePath, "package.json"));
-    const hasTsConfig = existsSync(join(workspacePath, "tsconfig.json"));
-    if (hasPackageJson || hasTsConfig) {
-      runValidation({
-        workspacePath,
-        steps: [
-          {
-            name: "typecheck",
-            command: "npx tsc --noEmit",
-            required: true,
-            retryable: false,
-          },
-        ],
-        execCommand: (command, cwd) =>
-          new Promise((resolve) => {
-            exec(command, { cwd }, (err, stdout) => {
-              resolve({
-                stdout: stdout || (err?.message ?? ""),
-                exitCode: err ? 1 : 0,
-              });
-            });
-          }),
-      })
-        .then((result) => {
+    if (endReason === "completed") {
+      const hasPackageJson = existsSync(join(workspacePath, "package.json"));
+      const hasTsConfig = existsSync(join(workspacePath, "tsconfig.json"));
+      if (hasPackageJson || hasTsConfig) {
+        try {
+          const result = await runValidation({
+            workspacePath,
+            steps: [
+              {
+                name: "typecheck",
+                command: "npx tsc --noEmit",
+                required: true,
+                retryable: false,
+              },
+            ],
+            execCommand: (command, cwd) =>
+              new Promise((resolve) => {
+                exec(command, { cwd }, (err, stdout) => {
+                  resolve({
+                    stdout: stdout || (err?.message ?? ""),
+                    exitCode: err ? 1 : 0,
+                  });
+                });
+              }),
+          });
+
+          events.push({
+            type: "validation_result",
+            passed: result.passed,
+            steps: result.steps,
+          });
+
           if (!result.passed) {
             const failed = result.steps
               .filter((s) => !s.passed)
@@ -175,14 +207,16 @@ export async function runSingleSession({
               `[session-manager] post-session validation failed: ${failed}`,
             );
           }
-        })
-        .catch((err) => {
+        } catch (err) {
           console.warn(
             "[session-manager] validation error (non-fatal):",
             err instanceof Error ? err.message : err,
           );
-        });
+        }
+      }
     }
+  } finally {
+    unregisterSession(resolvedSessionId);
   }
 
   return { events, endReason };
