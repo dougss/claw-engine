@@ -339,7 +339,9 @@ export function registerRunCommand(program: import("commander").Command) {
           let fallbackChainPosition = 0;
           if (opts.model) {
             const fallbackChain = config.models.fallback_chain;
-            const position = fallbackChain.findIndex(tier => tier.model === opts.model);
+            const position = fallbackChain.findIndex(
+              (tier) => tier.model === opts.model,
+            );
             if (position !== -1) {
               fallbackChainPosition = position;
             }
@@ -363,7 +365,7 @@ export function registerRunCommand(program: import("commander").Command) {
           const sessionStore = await createProductionSessionStore(connStr);
 
           const sessionId = taskId ?? `session-${Date.now()}`;
-          
+
           // Try to connect to Nexus MCP server
           let nexusHandle = null;
           let nexusWorkflowSection = "";
@@ -371,23 +373,31 @@ export function registerRunCommand(program: import("commander").Command) {
             nexusHandle = await connectNexusMcp({});
             if (nexusHandle) {
               console.log("[nexus] Connected to MCP server");
-              
+
               // Call the 'nexus' tool with the task prompt to get workflow
-              const nexusResult = await nexusHandle.callTool("nexus", { 
-                intent: prompt 
+              const nexusResult = await nexusHandle.callTool("nexus", {
+                intent: prompt,
               });
-              
+
               if (!nexusResult.isError) {
                 nexusWorkflowSection = `## Nexus Workflow\n${nexusResult.output}`;
                 console.log("[nexus] Retrieved workflow for task");
               } else {
-                console.warn("[nexus] Failed to retrieve workflow:", nexusResult.output);
+                console.warn(
+                  "[nexus] Failed to retrieve workflow:",
+                  nexusResult.output,
+                );
               }
             } else {
-              console.log("[nexus] MCP server not available, continuing without Nexus integration");
+              console.log(
+                "[nexus] MCP server not available, continuing without Nexus integration",
+              );
             }
           } catch (error) {
-            console.warn("[nexus] Error connecting to MCP server:", error instanceof Error ? error.message : String(error));
+            console.warn(
+              "[nexus] Error connecting to MCP server:",
+              error instanceof Error ? error.message : String(error),
+            );
           }
 
           const engineConfig = createQueryEngineConfig({
@@ -420,11 +430,13 @@ export function registerRunCommand(program: import("commander").Command) {
           ].join("\n");
 
           // Combine built-in tools with Nexus MCP tools if available
-          let allToolDefinitions = [...builtins.map((t) => ({
-            name: t.name,
-            description: t.description,
-            inputSchema: t.inputSchema,
-          }))];
+          let allToolDefinitions = [
+            ...builtins.map((t) => ({
+              name: t.name,
+              description: t.description,
+              inputSchema: t.inputSchema,
+            })),
+          ];
 
           if (nexusHandle) {
             allToolDefinitions = [...allToolDefinitions, ...nexusHandle.tools];
@@ -438,6 +450,10 @@ export function registerRunCommand(program: import("commander").Command) {
             sessionStore,
             toolHandlers,
             permissionRules: DEFAULT_PERMISSION_RULES,
+            mcpCallTool: nexusHandle
+              ? (name: string, input: unknown) =>
+                  nexusHandle.callTool(name, input)
+              : undefined,
           });
 
           const autoResume = opts.noResume !== true;
@@ -589,10 +605,13 @@ export function registerRunCommand(program: import("commander").Command) {
                 await nexusHandle.disconnect();
                 console.log("[nexus] Disconnected from MCP server");
               } catch (disconnectErr) {
-                console.warn("[nexus] Error disconnecting from MCP server:", disconnectErr);
+                console.warn(
+                  "[nexus] Error disconnecting from MCP server:",
+                  disconnectErr,
+                );
               }
             }
-            
+
             if (tempDir) {
               rmSync(tempDir, { recursive: true, force: true });
               tempDir = null;
