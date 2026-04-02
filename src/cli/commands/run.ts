@@ -207,6 +207,13 @@ export function registerRunCommand(program: import("commander").Command) {
 
         if (opts.pipeline) {
           const { runPipeline } = await import("../../core/pipeline.js");
+          const { resolve: resolvePath } = await import("node:path");
+          const { fileURLToPath } = await import("node:url");
+          const __dirname = fileURLToPath(new URL(".", import.meta.url));
+          const mcpConfigPath = resolvePath(
+            __dirname,
+            "../../../config/mcp.json",
+          );
 
           const result = await runPipeline({
             repoPath,
@@ -214,6 +221,7 @@ export function registerRunCommand(program: import("commander").Command) {
             config,
             claudeBin: config.providers.anthropic.binary,
             opencodeBin: config.providers.opencode.binary,
+            mcpConfigPath,
             opencodeModel:
               opts.model ??
               config.providers.opencode.default_model ??

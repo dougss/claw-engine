@@ -9,6 +9,7 @@ import {
   taskGetTool,
 } from "./builtins/task-tools.js";
 import { spawnAgentTool } from "./builtins/agent-tool.js";
+import { enterWorktreeTool, exitWorktreeTool } from "./builtins/worktree.js";
 
 const toolsByName = new Map<string, ToolHandler>();
 const mcpToolsByName = new Map<string, ToolDefinition>();
@@ -67,3 +68,5 @@ registerTool(taskListTool);
 registerTool(taskUpdateTool);
 registerTool(taskGetTool);
 registerTool(spawnAgentTool);
+registerTool(enterWorktreeTool);
+registerTool(exitWorktreeTool);

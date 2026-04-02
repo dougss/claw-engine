@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "nexus": {
+      "type": "stdio",
+      "command": "/opt/homebrew/opt/node@22/bin/node",
+      "args": ["/Users/macmini/server/apps/nexus/bin/nexus-mcp"]
+    }
+  }
+}

@@ -126,6 +126,8 @@ export interface ClaudePipeOptions {
   claudeBin?: string;
   maxTurns?: number;
   resumeId?: string;
+  /** Path to a JSON file with MCP server definitions. Passed as --mcp-config. */
+  mcpConfigPath?: string;
 }
 
 /**
@@ -155,6 +157,7 @@ export async function* runClaudePipe(
     args.push("--allowedTools", allowedTools.join(","));
   }
   if (opts.resumeId) args.push("--resume", opts.resumeId);
+  if (opts.mcpConfigPath) args.push("--mcp-config", opts.mcpConfigPath);
 
   const proc = spawn(claudeBin, args, {
     cwd: workspacePath,

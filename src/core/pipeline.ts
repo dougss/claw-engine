@@ -19,6 +19,8 @@ export interface PipelineContext {
   maxRetries: number;
   openPr: boolean;
   onEvent: (event: HarnessEvent) => void;
+  /** Optional MCP config JSON file path — passed to claude -p for PLAN phase. */
+  mcpConfigPath?: string;
 }
 
 export interface PipelineResult {
@@ -36,6 +38,7 @@ interface PlanPhaseInput {
   prompt: string;
   claudeBin: string;
   onEvent: (event: HarnessEvent) => void;
+  mcpConfigPath?: string;
 }
 
 export async function planPhase({
@@ -43,6 +46,7 @@ export async function planPhase({
   prompt,
   claudeBin,
   onEvent,
+  mcpConfigPath,
 }: PlanPhaseInput): Promise<string> {
   const start = Date.now();
   onEvent({ type: "phase_start", phase: "plan", attempt: 1 });
@@ -63,6 +67,7 @@ export async function planPhase({
     systemPrompt,
     claudeBin,
     workspacePath: repoPath,
+    mcpConfigPath,
   });
 
   for await (const event of stream) {
@@ -342,10 +347,17 @@ export async function runPipeline(
     maxRetries,
     openPr,
     onEvent,
+    mcpConfigPath,
   } = input;
   const validationSteps = config.validation.typescript;
 
-  const plan = await planPhase({ repoPath, prompt, claudeBin, onEvent });
+  const plan = await planPhase({
+    repoPath,
+    prompt,
+    claudeBin,
+    onEvent,
+    mcpConfigPath,
+  });
 
   let validation: ValidationResult = { passed: false, steps: [] };
   let previousError: string | undefined;
