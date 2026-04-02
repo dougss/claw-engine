@@ -1,12 +1,18 @@
 import type { Message, ToolDefinition } from "../../types.js";
 import type { HarnessEvent } from "../events.js";
 import type { ModelAdapter } from "./adapter-types.js";
+import type { ClawEngineConfig } from "../../config-schema.js";
+import { createAlibabaAdapter } from "./alibaba-adapter.js";
 
 export interface RetryConfig {
   maxRetries: number;
   baseDelayMs: number;
   maxDelayMs: number;
   honorRetryAfter: boolean;
+  fallbackChainPosition?: number;
+  config?: ClawEngineConfig;
+  apiKey?: string;
+  baseUrl?: string;
 }
 
 const DEFAULT_RETRY_CONFIG: RetryConfig = {
@@ -82,40 +88,88 @@ export function withRetry(
     messages: Message[],
     tools: ToolDefinition[],
   ): AsyncGenerator<HarnessEvent> {
-    let attempt = 0;
+    let currentAdapter = adapter;
+    let currentFallbackPosition = resolved.fallbackChainPosition ?? 0;
 
     while (true) {
-      try {
-        for await (const event of adapter.chat(messages, tools)) {
-          yield event;
+      let attempt = 0;
+
+      while (true) {
+        try {
+          for await (const event of currentAdapter.chat(messages, tools)) {
+            yield event;
+          }
+          return;
+        } catch (err) {
+          const retryableErr = err as RetryableError;
+
+          if (!isRetryable(retryableErr) || attempt >= resolved.maxRetries) {
+            // All retries exhausted for current adapter, check if there's a fallback
+            if (resolved.config && resolved.fallbackChainPosition !== undefined) {
+              const fallbackChain = resolved.config.models.fallback_chain;
+              
+              // Find next alibaba tier in the chain (engine→engine fallback only)
+              let nextFallbackPosition = -1;
+              for (let i = currentFallbackPosition + 1; i < fallbackChain.length; i++) {
+                if (fallbackChain[i].provider === "alibaba" && fallbackChain[i].mode === "engine") {
+                  nextFallbackPosition = i;
+                  break;
+                }
+              }
+
+              if (nextFallbackPosition !== -1) {
+                // Create new adapter with next tier in the chain
+                const nextTier = fallbackChain[nextFallbackPosition];
+                
+                yield {
+                  type: "model_fallback",
+                  from: currentAdapter.name,
+                  to: nextTier.model,
+                  reason: retryableErr.message ?? String(err),
+                };
+
+                // Create new adapter with the next tier
+                currentAdapter = createAlibabaAdapter({
+                  name: nextTier.model,
+                  model: nextTier.model,
+                  apiKey: resolved.apiKey,
+                  baseUrl: resolved.baseUrl,
+                  maxContext: currentAdapter.maxContext,
+                  costPerInputToken: currentAdapter.costPerInputToken,
+                  costPerOutputToken: currentAdapter.costPerOutputToken,
+                });
+
+                // Update fallback position and reset attempts for the new adapter
+                currentFallbackPosition = nextFallbackPosition;
+                attempt = 0;
+                continue; // Try with the new adapter
+              }
+            }
+
+            // No fallback available or fallback disabled, re-throw the error
+            throw err;
+          }
+
+          let delayMs: number;
+          if (resolved.honorRetryAfter) {
+            delayMs =
+              getRetryAfterMs(retryableErr) ?? calcBackoffMs(attempt, resolved);
+          } else {
+            delayMs = calcBackoffMs(attempt, resolved);
+          }
+
+          attempt++;
+
+          yield {
+            type: "api_retry",
+            attempt,
+            maxAttempts: resolved.maxRetries,
+            delayMs,
+            error: retryableErr.message ?? String(err),
+          };
+
+          await sleep(delayMs);
         }
-        return;
-      } catch (err) {
-        const retryableErr = err as RetryableError;
-
-        if (!isRetryable(retryableErr) || attempt >= resolved.maxRetries) {
-          throw err;
-        }
-
-        let delayMs: number;
-        if (resolved.honorRetryAfter) {
-          delayMs =
-            getRetryAfterMs(retryableErr) ?? calcBackoffMs(attempt, resolved);
-        } else {
-          delayMs = calcBackoffMs(attempt, resolved);
-        }
-
-        attempt++;
-
-        yield {
-          type: "api_retry",
-          attempt,
-          maxAttempts: resolved.maxRetries,
-          delayMs,
-          error: retryableErr.message ?? String(err),
-        };
-
-        await sleep(delayMs);
       }
     }
   }

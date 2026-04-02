@@ -333,13 +333,28 @@ export function registerRunCommand(program: import("commander").Command) {
             inputSchema: t.inputSchema,
           }));
 
+          // Find the appropriate fallback chain position based on the model
+          let fallbackChainPosition = 0;
+          if (opts.model) {
+            const fallbackChain = config.models.fallback_chain;
+            const position = fallbackChain.findIndex(tier => tier.model === opts.model);
+            if (position !== -1) {
+              fallbackChainPosition = position;
+            }
+          }
+
           const baseAdapter = createAlibabaAdapter({
             name: "qwen-cli",
             model: opts.model ?? config.models.default,
             apiKey,
             baseUrl: config.providers.alibaba.base_url,
           });
-          const adapter = withRetry(baseAdapter);
+          const adapter = withRetry(baseAdapter, {
+            fallbackChainPosition,
+            config,
+            apiKey,
+            baseUrl: config.providers.alibaba.base_url,
+          });
 
           const db = taskId ? getDb({ connectionString: connStr }) : null;
 
