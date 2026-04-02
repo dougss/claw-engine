@@ -17,6 +17,7 @@ import {
   type PhaseEvent,
   getPhaseOutput,
   type PhaseOutput,
+  asRecord,
 } from "../lib/pipeline";
 import { PhaseTimeline } from "../components/phase-timeline";
 import { PageHeader, StatusBadge, EmptyState } from "../components/ui";
@@ -92,12 +93,12 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
 }) {
   const currentPhase = getCurrentPhase(phases);
   const telemetry = task.telemetry;
-  
+
   // Initialize state to auto-select first completed or current phase
   const [selectedPhase, setSelectedPhase] = useState(() => {
     // Find first completed phase
-    const completedPhase = PHASE_ORDER.find(phase => 
-      getPhaseStatus(phase, phases, currentPhase) === 'completed'
+    const completedPhase = PHASE_ORDER.find(
+      (phase) => getPhaseStatus(phase, phases, currentPhase) === "completed",
     );
     // If no completed phase, try current phase
     if (completedPhase) return completedPhase;
@@ -105,7 +106,7 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
     // Otherwise just pick the first phase
     return PHASE_ORDER[0];
   });
-  
+
   const [showExecutionLogs, setShowExecutionLogs] = useState(false);
   const [showValidations, setShowValidations] = useState(true);
 
@@ -118,26 +119,26 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
   const phaseOutput: PhaseOutput = getPhaseOutput(selectedPhase, telemetry);
 
   // Check if selected phase has been attempted
-  const isPhaseAttempted = phases.some(p => 
-    p.phase === selectedPhase && p.eventType === "phase_start"
+  const isPhaseAttempted = phases.some(
+    (p) => p.phase === selectedPhase && p.eventType === "phase_start",
   );
 
   // Extract PR URL if this is the PR phase
   let prUrl: string | null = null;
-  if (selectedPhase === 'pr') {
+  if (selectedPhase === "pr") {
     // Look for session_end events with GitHub URL in result
     for (const event of telemetry) {
-      if (event.eventType === 'session_end') {
-        const dataRecord = event.data as Record<string, unknown>;
+      if (event.eventType === "session_end") {
+        const dataRecord = asRecord(event.data);
         const result = dataRecord.result;
-        if (typeof result === 'string' && result.includes('github.com')) {
+        if (typeof result === "string" && result.includes("github.com")) {
           prUrl = result;
           break;
         }
-      } else if (event.eventType === 'text_delta') {
-        const dataRecord = event.data as Record<string, unknown>;
+      } else if (event.eventType === "text_delta") {
+        const dataRecord = asRecord(event.data);
         const text = dataRecord.text;
-        if (typeof text === 'string' && text.includes('github.com')) {
+        if (typeof text === "string" && text.includes("github.com")) {
           prUrl = text;
           break;
         }
@@ -181,12 +182,13 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
                   style={{
                     background:
                       status !== "pending" ? colors.bg : "rgba(46,74,106,0.06)",
-                    borderColor:
-                      isSelected 
-                        ? colors.accent 
-                        : (status !== "pending" ? colors.border : "rgba(46,74,106,0.2)"),
+                    borderColor: isSelected
+                      ? colors.accent
+                      : status !== "pending"
+                        ? colors.border
+                        : "rgba(46,74,106,0.2)",
                     opacity: status === "pending" ? 0.5 : 1,
-                    boxShadow: isSelected 
+                    boxShadow: isSelected
                       ? `0 0 0 2px ${colors.accent}, 0 0 10px ${colors.glow}`
                       : "none",
                   }}
@@ -259,10 +261,13 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
       >
         <div className="px-5 py-3 border-b border-border-2">
           <h3 className="text-sm font-semibold text-text-primary">
-            {selectedPhase === 'plan' ? 'Plan' : 
-             selectedPhase === 'review' ? 'Review' : 
-             selectedPhase === 'pr' ? 'Pull Request' : 
-             'Output'}
+            {selectedPhase === "plan"
+              ? "Plan"
+              : selectedPhase === "review"
+                ? "Review"
+                : selectedPhase === "pr"
+                  ? "Pull Request"
+                  : "Output"}
           </h3>
         </div>
         <div className="p-4">
@@ -287,10 +292,10 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
                   <details className="group">
                     <summary className="cursor-pointer font-mono text-xs text-text-primary mb-2 flex items-center gap-2">
                       <span>Tool Calls ({phaseOutput.toolCalls.length})</span>
-                      <svg 
-                        className="w-3 h-3 transition-transform group-open:rotate-90" 
-                        fill="none" 
-                        stroke="currentColor" 
+                      <svg
+                        className="w-3 h-3 transition-transform group-open:rotate-90"
+                        fill="none"
+                        stroke="currentColor"
                         viewBox="0 0 24 24"
                       >
                         <polyline points="9 18 15 12 9 6"></polyline>
@@ -298,18 +303,20 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
                     </summary>
                     <div className="mt-2 space-y-2">
                       {phaseOutput.toolCalls.map((call, index) => (
-                        <div 
+                        <div
                           key={index}
                           className="p-2 rounded border bg-bg-secondary text-xs font-mono"
-                          style={{ 
+                          style={{
                             borderColor: "rgba(15,31,53,0.5)",
-                            background: "rgba(10,22,40,0.5)"
+                            background: "rgba(10,22,40,0.5)",
                           }}
                         >
                           <div className="flex items-center gap-2 mb-1">
-                            <span 
+                            <span
                               className="text-xs font-mono font-bold"
-                              style={{ color: PHASE_COLORS[selectedPhase].accent }}
+                              style={{
+                                color: PHASE_COLORS[selectedPhase].accent,
+                              }}
                             >
                               {call.name}
                             </span>
@@ -328,12 +335,14 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
               )}
 
               {/* PR URL */}
-              {selectedPhase === 'pr' && prUrl && (
+              {selectedPhase === "pr" && prUrl && (
                 <div className="mb-4">
-                  <p className="font-mono text-xs text-text-primary mb-1">Pull Request URL:</p>
-                  <a 
-                    href={prUrl} 
-                    target="_blank" 
+                  <p className="font-mono text-xs text-text-primary mb-1">
+                    Pull Request URL:
+                  </p>
+                  <a
+                    href={prUrl}
+                    target="_blank"
                     rel="noopener noreferrer"
                     className="font-mono text-xs text-accent hover:underline break-all"
                   >
@@ -364,25 +373,28 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
             <span className="font-mono text-[9px] text-text-dim">
               {phaseOutput.toolCalls.length} events
             </span>
-            <svg 
-              className={`w-4 h-4 transition-transform ${showExecutionLogs ? 'rotate-90' : ''}`} 
-              fill="none" 
-              stroke="currentColor" 
+            <svg
+              className={`w-4 h-4 transition-transform ${showExecutionLogs ? "rotate-90" : ""}`}
+              fill="none"
+              stroke="currentColor"
               viewBox="0 0 24 24"
             >
               <polyline points="9 18 15 12 9 6"></polyline>
             </svg>
           </div>
         </button>
-        
+
         {showExecutionLogs && (
           <div className="p-4 max-h-64 overflow-y-auto">
             {phaseOutput.toolCalls.length > 0 ? (
-              <div className="divide-y" style={{ borderColor: "rgba(15,31,53,0.5)" }}>
+              <div
+                className="divide-y"
+                style={{ borderColor: "rgba(15,31,53,0.5)" }}
+              >
                 {phaseOutput.toolCalls.map((call, index) => (
                   <div key={index} className="py-2.5 font-mono text-xs">
                     <div className="flex items-center gap-2 mb-1">
-                      <span 
+                      <span
                         className="font-mono font-bold"
                         style={{ color: PHASE_COLORS[selectedPhase].accent }}
                       >
@@ -390,7 +402,7 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
                       </span>
                       <span className="text-text-dim truncate">
                         {JSON.stringify(call.input).substring(0, 60)}
-                        {JSON.stringify(call.input).length > 60 && '...'}
+                        {JSON.stringify(call.input).length > 60 && "..."}
                       </span>
                     </div>
                     <div className="text-[9px] text-text-dim ml-2">
@@ -422,16 +434,16 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
             <h3 className="text-sm font-semibold text-text-primary">
               Validations
             </h3>
-            <svg 
-              className={`w-4 h-4 transition-transform ${showValidations ? 'rotate-90' : ''}`} 
-              fill="none" 
-              stroke="currentColor" 
+            <svg
+              className={`w-4 h-4 transition-transform ${showValidations ? "rotate-90" : ""}`}
+              fill="none"
+              stroke="currentColor"
               viewBox="0 0 24 24"
             >
               <polyline points="9 18 15 12 9 6"></polyline>
             </svg>
           </button>
-          
+
           {showValidations && (
             <div className="p-4 space-y-2">
               {validationResults.map((vr, vi) => {
