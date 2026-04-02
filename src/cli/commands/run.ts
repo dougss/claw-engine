@@ -1,4 +1,5 @@
 import { resolve, basename } from "node:path";
+import { execSync } from "node:child_process";
 import { loadConfig } from "../../config.js";
 import { loadProjectContext } from "../../harness/context-builder.js";
 import { routeTask } from "../../core/router.js";
@@ -42,6 +43,7 @@ export function registerRunCommand(program: import("commander").Command) {
     .option("--max-turns <n>", "Maximum agent turns", parseInt)
     .option("--no-resume", "Disable auto-resume on checkpoint")
     .option("--resume <sessionId>", "Resume a previous session by ID")
+    .option("--no-commit", "Skip automatic git commit of changes")
     .action(
       async (
         repo: string,
@@ -53,6 +55,7 @@ export function registerRunCommand(program: import("commander").Command) {
           maxTurns?: number;
           resume?: boolean | string;
           noResume?: boolean;
+          noCommit?: boolean;
         },
       ) => {
         const repoPath = resolve(repo);
@@ -139,6 +142,27 @@ export function registerRunCommand(program: import("commander").Command) {
           );
         }
 
+        const autoCommit = (description: string) => {
+          if (opts.noCommit) return;
+          try {
+            const dirty = execSync(`git -C "${repoPath}" status --porcelain`, {
+              encoding: "utf8",
+            }).trim();
+            if (!dirty) {
+              console.log("[git] nothing to commit");
+              return;
+            }
+            execSync(`git -C "${repoPath}" add -A`, { stdio: "pipe" });
+            const msg = `claw: ${description.slice(0, 72)}`;
+            execSync(`git -C "${repoPath}" commit -m ${JSON.stringify(msg)}`, {
+              stdio: "pipe",
+            });
+            console.log("[git] committed changes");
+          } catch (err) {
+            console.error("[git] commit failed:", (err as Error).message);
+          }
+        };
+
         const finalizeDb = async (wiStatus: string, taskStatus: string) => {
           if (!workItemId || !taskId) return;
           try {
@@ -201,6 +225,7 @@ export function registerRunCommand(program: import("commander").Command) {
               : endReason === "interrupted"
                 ? "interrupted"
                 : "failed";
+          if (endReason === "completed") autoCommit(prompt);
           await finalizeDb(wiStatus, taskStatus);
         } else {
           // Engine mode: Qwen/DashScope via OpenAI-compatible API
@@ -418,6 +443,7 @@ export function registerRunCommand(program: import("commander").Command) {
               : endReason === "interrupted"
                 ? "interrupted"
                 : "failed";
+          if (endReason === "completed") autoCommit(prompt);
           await finalizeDb(taskStatus, taskStatus);
         }
       },
