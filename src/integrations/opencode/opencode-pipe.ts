@@ -184,10 +184,11 @@ export async function* runOpencodePipe(
         }
 
         if (parsed.type === "error") {
-          const err = parsed as OpencodeErrorLine;
           encounteredError = true;
           errorMessage =
-            err.error?.data?.message ?? err.error?.name ?? "unknown error";
+            parsed.error?.data?.message ??
+            parsed.error?.name ??
+            "unknown error";
           continue;
         }
 
