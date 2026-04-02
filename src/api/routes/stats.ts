@@ -30,16 +30,16 @@ export function registerStatsRoutes(app: FastifyInstance, db: Db): void {
         })
         .from(tasks)
         .groupBy(tasks.model)
-        .orderBy(sql`${tasks.model}`)
+        .orderBy(tasks.model),
     ]);
 
     return {
       totalWorkItems: workItemStats?.total ?? 0,
       totalTasks: taskStats[0]?.total ?? 0,
-      totalTokensUsed: taskStats[0]?.totalTokens ?? 0,
+      totalTokensUsed: parseInt(String(taskStats[0]?.totalTokens ?? 0), 10),
       totalCostUsd: parseFloat(String(taskStats[0]?.totalCost ?? "0")),
-      tasksByModel: modelBreakdown.map(row => ({
-        model: row.model || 'unknown',
+      tasksByModel: modelBreakdown.map((row) => ({
+        model: row.model || "unknown",
         count: row.count,
       })),
     };

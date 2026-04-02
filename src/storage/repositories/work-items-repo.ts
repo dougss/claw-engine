@@ -1,5 +1,5 @@
-import { eq } from "drizzle-orm";
-import { workItems } from "../schema/index.js";
+import { eq, sql } from "drizzle-orm";
+import { workItems, tasks } from "../schema/index.js";
 import type { getDb } from "../db.js";
 
 type Db = ReturnType<typeof getDb>;
@@ -52,4 +52,21 @@ export async function updateWorkItemStatus(db: Db, id: string, status: string) {
     .where(eq(workItems.id, id))
     .returning();
   return result;
+}
+
+export async function rollupWorkItemTokens(
+  db: Db,
+  workItemId: string,
+): Promise<void> {
+  await db
+    .update(workItems)
+    .set({
+      totalTokensUsed: sql`(
+        SELECT COALESCE(SUM(${tasks.tokensUsed}), 0)
+        FROM ${tasks}
+        WHERE ${tasks.workItemId} = ${workItemId}
+      )`,
+      updatedAt: new Date(),
+    })
+    .where(eq(workItems.id, workItemId));
 }

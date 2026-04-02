@@ -8,6 +8,7 @@ import { getDb } from "../../storage/db.js";
 import {
   createWorkItem,
   updateWorkItemStatus,
+  rollupWorkItemTokens,
 } from "../../storage/repositories/work-items-repo.js";
 import {
   createTask,
@@ -255,6 +256,9 @@ export function registerRunCommand(program: import("commander").Command) {
                     },
                   }).catch(() => {});
                   void updateTaskTokens(db, taskId, event.used).catch(() => {});
+                  if (workItemId) {
+                    void rollupWorkItemTokens(db, workItemId).catch(() => {});
+                  }
                 }
               } else if (event.type === "session_end") {
                 endReason = event.reason;
@@ -374,9 +378,13 @@ export function registerRunCommand(program: import("commander").Command) {
             if (nexusHandle) {
               console.log("[nexus] Connected to MCP server");
 
-              // Call the 'nexus' tool with the task prompt to get workflow
+              // Call the 'nexus' tool with a short intent (Nexus classifies better with concise phrases)
+              const nexusIntent =
+                prompt.length > 80
+                  ? prompt.slice(0, 80).replace(/\s\S*$/, "")
+                  : prompt;
               const nexusResult = await nexusHandle.callTool("nexus", {
-                intent: prompt,
+                intent: nexusIntent,
               });
 
               if (!nexusResult.isError) {
@@ -501,6 +509,9 @@ export function registerRunCommand(program: import("commander").Command) {
                     },
                   }).catch(() => {});
                   void updateTaskTokens(db, taskId, event.used).catch(() => {});
+                  if (workItemId) {
+                    void rollupWorkItemTokens(db, workItemId).catch(() => {});
+                  }
                 }
               } else if (event.type === "compaction") {
                 process.stderr.write(

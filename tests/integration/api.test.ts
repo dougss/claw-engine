@@ -77,8 +77,27 @@ describe("API — health", () => {
     const res = await app.inject({ method: "GET", url: "/api/health" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body) as { status: string; uptime: number };
-    expect(body.status).toBe('ok');
-    expect(typeof body.uptime).toBe('number');
+    expect(body.status).toBe("ok");
+    expect(typeof body.uptime).toBe("number");
     expect(body.uptime).toBeGreaterThan(0);
+  });
+});
+
+describe("API — stats", () => {
+  it("GET /api/stats returns 200 with all fields", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/stats" });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as {
+      totalWorkItems: number;
+      totalTasks: number;
+      totalTokensUsed: number;
+      totalCostUsd: number;
+      tasksByModel: { model: string; count: number }[];
+    };
+    expect(typeof body.totalWorkItems).toBe("number");
+    expect(typeof body.totalTasks).toBe("number");
+    expect(typeof body.totalTokensUsed).toBe("number");
+    expect(typeof body.totalCostUsd).toBe("number");
+    expect(Array.isArray(body.tasksByModel)).toBe(true);
   });
 });
