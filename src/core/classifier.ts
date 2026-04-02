@@ -21,9 +21,13 @@ const CLASSIFICATION_PROMPT = `You are a task complexity classifier for a coding
 Classify the following coding task as exactly one of: simple, medium, or complex.
 
 Definitions:
-- simple: mechanical change, 1-2 files, no reasoning needed (add a field, fix a typo, rename a variable, update a constant)
-- medium: moderate understanding needed, 2-5 files, clear goal (add a feature, write tests, implement an interface)
-- complex: deep reasoning required (debugging, architecture decisions, investigation across many files, security, refactoring, cross-system changes)
+- simple: mechanical change, 1-2 files, no reasoning needed (add a field, fix a typo, rename a variable, update a constant, copy/move files, update documentation)
+- medium: clear goal with defined scope, 2-10 files, standard implementation (add a feature, fix a bug with known location, write tests, implement an interface, add an API endpoint, refactor a module, add telemetry/logging)
+- complex: genuinely ambiguous goal OR requires understanding emergent system behavior across many components OR security/auth changes OR no clear implementation path exists without deep investigation first
+
+When in doubt between medium and complex, choose medium.
+Most coding tasks — including multi-file features, bug fixes, refactors, and documentation — are medium.
+complex should be rare: less than 10% of tasks.
 
 Reply with ONLY the single word: simple, medium, or complex. No explanation.
 
