@@ -2,6 +2,7 @@ import type { ToolDefinition } from "../../types.js";
 import type { ToolHandler } from "./tool-types.js";
 import { webFetchTool } from "./builtins/web-fetch.js";
 import { webSearchTool } from "./builtins/web-search.js";
+import { taskCreateTool, taskListTool, taskUpdateTool, taskGetTool } from "./builtins/task-tools.js";
 
 const toolsByName = new Map<string, ToolHandler>();
 const mcpToolsByName = new Map<string, ToolDefinition>();
@@ -55,3 +56,7 @@ export function clearRegistry(): void {
 
 registerTool(webFetchTool);
 registerTool(webSearchTool);
+registerTool(taskCreateTool);
+registerTool(taskListTool);
+registerTool(taskUpdateTool);
+registerTool(taskGetTool);
