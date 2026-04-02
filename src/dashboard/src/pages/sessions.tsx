@@ -1,15 +1,28 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { fetchExecutions, type Execution, type TaskFull } from "../lib/api";
+import {
+  fetchExecutions,
+  fetchTaskWithTelemetry,
+  type Execution,
+  type TaskFull,
+} from "../lib/api";
 import { createSseClient } from "../lib/sse";
+import {
+  extractPhaseEvents,
+  isPipelineRun,
+  PHASE_LABELS,
+  PHASE_COLORS,
+  PHASE_ORDER,
+  formatDuration,
+  type PhaseEvent,
+} from "../lib/pipeline";
+import { PhaseBadges } from "../components/phase-timeline";
 import {
   StatusBadge,
   StatusDot,
   PageHeader,
   EmptyState,
 } from "../components/ui";
-
-// ── helpers ───────────────────────────────────────────────────────────────────
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -31,7 +44,75 @@ function fmtCost(s: string): string {
   return `$${n.toFixed(4)}`;
 }
 
-// ── task row (inside expand) ──────────────────────────────────────────────────
+function TypewriterStream({ taskId }: { taskId: string }) {
+  const [text, setText] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const cleanup = createSseClient((event) => {
+      if (event.type === "text_delta") {
+        const data = event.data as Record<string, unknown>;
+        const chunk = (data?.text as string) ?? "";
+        if (chunk) {
+          setText((prev) => {
+            const next = prev + chunk;
+            return next.length > 2000 ? next.slice(-2000) : next;
+          });
+        }
+      }
+    });
+    return cleanup;
+  }, [taskId]);
+
+  useEffect(() => {
+    ref.current?.scrollTo({
+      top: ref.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [text]);
+
+  if (!text) return null;
+
+  return (
+    <div
+      ref={ref}
+      className="mt-3 p-3 rounded-lg border border-border max-h-32 overflow-y-auto"
+      style={{ background: "rgba(5,10,15,0.6)" }}
+    >
+      <pre className="text-[10px] font-mono text-text-secondary whitespace-pre-wrap leading-relaxed">
+        {text}
+        <span className="typewriter-cursor" />
+      </pre>
+    </div>
+  );
+}
+
+function PhaseTokenBreakdown({ phases }: { phases: PhaseEvent[] }) {
+  const phaseEnds = phases.filter((p) => p.eventType === "phase_end");
+  if (phaseEnds.length === 0) return null;
+
+  return (
+    <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+      {PHASE_ORDER.map((phase) => {
+        const end = phaseEnds.find((p) => p.phase === phase);
+        if (!end?.durationMs) return null;
+        const colors = PHASE_COLORS[phase];
+        return (
+          <span
+            key={phase}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono"
+            style={{ background: colors.bg, color: colors.accent }}
+          >
+            {PHASE_LABELS[phase]}
+            <span className="text-text-dim">
+              {formatDuration(end.durationMs)}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 function TaskRow({ task, onLogs }: { task: TaskFull; onLogs: () => void }) {
   return (
@@ -69,23 +150,36 @@ function TaskRow({ task, onLogs }: { task: TaskFull; onLogs: () => void }) {
   );
 }
 
-// ── execution card ────────────────────────────────────────────────────────────
-
 function ExecutionCard({
   exec,
   onLogs,
   onDag,
+  onPipeline,
 }: {
   exec: Execution;
   onLogs: (taskId: string) => void;
   onDag: (wiId: string) => void;
+  onPipeline: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [phases, setPhases] = useState<PhaseEvent[]>([]);
+  const [hasPipeline, setHasPipeline] = useState(false);
   const firstTask = exec.tasks[0] as TaskFull | undefined;
   const model = firstTask?.model ?? null;
   const isActive = ["running", "starting", "provisioning"].includes(
     exec.status,
   );
+
+  useEffect(() => {
+    if (!firstTask) return;
+    fetchTaskWithTelemetry(firstTask.id)
+      .then((tw) => {
+        const isPipe = isPipelineRun(tw.telemetry);
+        setHasPipeline(isPipe);
+        if (isPipe) setPhases(extractPhaseEvents(tw.telemetry));
+      })
+      .catch(() => {});
+  }, [firstTask?.id]);
 
   return (
     <div
@@ -98,14 +192,12 @@ function ExecutionCard({
           : "0 2px 12px rgba(0,0,0,0.2)",
       }}
     >
-      {/* Main row */}
       <div className="p-4">
         <div className="flex items-start gap-3">
           <div className="mt-1 shrink-0">
             <StatusDot status={exec.status} size={5} />
           </div>
 
-          {/* Title — line-clamp-2, no truncation */}
           <div className="flex-1 min-w-0">
             <p className="text-sm text-text-primary font-medium leading-snug [display:-webkit-box] [-webkit-line-clamp:2] [-webkit-box-orient:vertical] overflow-hidden">
               {exec.title}
@@ -126,15 +218,22 @@ function ExecutionCard({
               <span className="font-mono text-[9px] text-text-dim">
                 {timeAgo(exec.createdAt)}
               </span>
+              {hasPipeline && (
+                <>
+                  <span className="text-border-3">·</span>
+                  <PhaseBadges phases={phases} />
+                </>
+              )}
             </div>
+            {hasPipeline && <PhaseTokenBreakdown phases={phases} />}
           </div>
 
           <StatusBadge status={exec.status} />
         </div>
 
-        {/* Footer */}
+        {isActive && firstTask && <TypewriterStream taskId={firstTask.id} />}
+
         <div className="mt-3 pt-3 border-t border-border flex items-center gap-3 flex-wrap">
-          {/* Tokens + cost */}
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5">
               <svg
@@ -171,7 +270,6 @@ function ExecutionCard({
             )}
           </div>
 
-          {/* Action buttons */}
           <div className="ml-auto flex items-center gap-2">
             {firstTask && (
               <button
@@ -193,6 +291,32 @@ function ExecutionCard({
                   <polyline points="10 9 9 9 8 9" />
                 </svg>
                 Logs
+              </button>
+            )}
+            {hasPipeline && (
+              <button
+                onClick={onPipeline}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border font-mono text-[10px] transition-all duration-150 cursor-pointer"
+                style={{
+                  borderColor: "rgba(167,139,250,0.3)",
+                  color: "#a78bfa",
+                  background: "rgba(167,139,250,0.06)",
+                }}
+              >
+                <svg
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <circle cx="6" cy="12" r="2" />
+                  <circle cx="12" cy="12" r="2" />
+                  <circle cx="18" cy="12" r="2" />
+                </svg>
+                Pipeline
               </button>
             )}
             <button
@@ -238,7 +362,6 @@ function ExecutionCard({
         </div>
       </div>
 
-      {/* Expanded task list */}
       {expanded && exec.tasks.length > 1 && (
         <div style={{ background: "rgba(5,10,15,0.5)" }}>
           {exec.tasks.map((task) => (
@@ -253,8 +376,6 @@ function ExecutionCard({
     </div>
   );
 }
-
-// ── live indicator ────────────────────────────────────────────────────────────
 
 function ActiveBadge({ count }: { count: number }) {
   if (count === 0) return null;
@@ -275,8 +396,6 @@ function ActiveBadge({ count }: { count: number }) {
   );
 }
 
-// ── page ──────────────────────────────────────────────────────────────────────
-
 export function SessionsPage() {
   const navigate = useNavigate();
   const [executions, setExecutions] = useState<Execution[]>([]);
@@ -287,18 +406,18 @@ export function SessionsPage() {
 
   useEffect(() => {
     reload();
-    const cleanup = createSseClient((event) => {
+    // SSE drives all updates — no polling interval needed
+    return createSseClient((event) => {
       if (
-        ["session_start", "session_end", "token_update"].includes(event.type)
+        event.type === "session_start" ||
+        event.type === "session_end" ||
+        event.type === "token_update" ||
+        event.type === "phase_start" ||
+        event.type === "phase_end"
       ) {
         reload();
       }
     });
-    const interval = setInterval(reload, 8000);
-    return () => {
-      cleanup();
-      clearInterval(interval);
-    };
   }, [reload]);
 
   const activeCount = executions.filter((e) =>
@@ -330,7 +449,7 @@ export function SessionsPage() {
               </svg>
             }
             title="No executions yet"
-            description='Run: npm run claw -- run &lt;repo&gt; "prompt"'
+            description='Run: npm run claw -- run <repo> "prompt"'
           />
         ) : (
           executions.map((exec) => (
@@ -339,6 +458,7 @@ export function SessionsPage() {
               exec={exec}
               onLogs={(taskId) => navigate(`/logs?task=${taskId}`)}
               onDag={(wiId) => navigate(`/dag?wi=${wiId}`)}
+              onPipeline={() => navigate("/pipeline")}
             />
           ))
         )}

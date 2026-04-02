@@ -1,10 +1,14 @@
+import type { SseEventType } from "./api";
+
 export interface SseEvent {
   id: number;
-  type: string;
+  type: SseEventType;
   data: unknown;
 }
 
 type EventHandler = (event: SseEvent) => void;
+
+const RECONNECT_DELAY_MS = 3000;
 
 export function createSseClient(onEvent: EventHandler): () => void {
   let lastEventId = "";
@@ -12,15 +16,25 @@ export function createSseClient(onEvent: EventHandler): () => void {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
 
+  function clearReconnect() {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
   function connect() {
     if (closed) return;
-    const url = lastEventId ? `/api/events` : `/api/events`;
-    es = new EventSource(url);
 
-    if (lastEventId) {
-      // EventSource doesn't support custom headers; reconnect via close/open
-      // uses the standard Last-Event-ID mechanism automatically
-    }
+    // Always clear any pending reconnect before opening a new connection
+    // so we never have two timers racing each other
+    clearReconnect();
+
+    const url = lastEventId
+      ? `/api/v1/events?lastEventId=${lastEventId}`
+      : `/api/v1/events`;
+
+    es = new EventSource(url);
 
     es.onmessage = (ev) => {
       try {
@@ -34,8 +48,11 @@ export function createSseClient(onEvent: EventHandler): () => void {
 
     es.onerror = () => {
       es?.close();
+      es = null;
       if (!closed) {
-        reconnectTimer = setTimeout(connect, 3000);
+        // Guard: never schedule more than one reconnect timer at a time
+        clearReconnect();
+        reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
       }
     };
   }
@@ -44,7 +61,8 @@ export function createSseClient(onEvent: EventHandler): () => void {
 
   return () => {
     closed = true;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
+    clearReconnect();
     es?.close();
+    es = null;
   };
 }

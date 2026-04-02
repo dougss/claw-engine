@@ -215,55 +215,74 @@ export function registerRunCommand(program: import("commander").Command) {
             "../../../config/mcp.json",
           );
 
-          const result = await runPipeline({
-            repoPath,
-            prompt,
-            config,
-            claudeBin: config.providers.anthropic.binary,
-            opencodeBin: config.providers.opencode.binary,
-            mcpConfigPath,
-            opencodeModel:
-              opts.model ??
-              config.providers.opencode.default_model ??
-              "dashscope/qwen3-coder-plus",
-            maxRetries: config.validation.max_retries,
-            openPr: !!opts.pr,
-            onEvent: (event) => {
-              if (event.type === "text_delta") {
-                process.stdout.write(event.text);
-              } else if (event.type === "phase_start") {
-                console.log(
-                  `\n[pipeline] ▶ ${event.phase.toUpperCase()} (attempt ${event.attempt})`,
-                );
-              } else if (event.type === "phase_end") {
-                const icon = event.success ? "✅" : "❌";
-                console.log(
-                  `[pipeline] ${icon} ${event.phase.toUpperCase()} (${event.durationMs}ms)`,
-                );
-              } else if (event.type === "validation_result") {
-                for (const step of event.steps) {
-                  const icon = step.passed ? "✓" : "✗";
-                  console.log(`  ${icon} ${step.name} (${step.durationMs}ms)`);
-                }
-              }
-              if (db && taskId) {
-                void insertTelemetryEvent(db, {
-                  taskId,
-                  eventType: event.type,
-                  payload: event,
-                }).catch(() => {});
-              }
-            },
-          });
+          const githubAppId = process.env.CLAW_GITHUB_APP_ID;
+          const githubInstallationId = process.env.CLAW_GITHUB_INSTALLATION_ID;
+          const githubPrivateKeyPath = process.env.CLAW_GITHUB_PRIVATE_KEY_PATH;
+          const githubBotUserId = process.env.CLAW_GITHUB_BOT_USER_ID;
 
-          if (result.executeSuccess) {
-            autoCommit(repoPath, prompt, !!opts.noCommit);
-            console.log("\n✅ pipeline complete");
-            if (result.prUrl) console.log(`PR: ${result.prUrl}`);
-            await finalizeDb("completed", "completed");
-          } else {
-            console.log(
-              "\n❌ pipeline failed (validation did not pass after retries)",
+          try {
+            const result = await runPipeline({
+              repoPath,
+              prompt,
+              config,
+              claudeBin: config.providers.anthropic.binary,
+              opencodeBin: config.providers.opencode.binary,
+              mcpConfigPath,
+              opencodeModel:
+                opts.model ??
+                config.providers.opencode.default_model ??
+                "dashscope/qwen3-coder-plus",
+              maxRetries: config.validation.max_retries,
+              openPr: !!opts.pr,
+              githubAppId,
+              githubInstallationId,
+              githubPrivateKeyPath,
+              githubBotUserId,
+              onEvent: (event) => {
+                if (event.type === "text_delta") {
+                  process.stdout.write(event.text);
+                } else if (event.type === "phase_start") {
+                  console.log(
+                    `\n[pipeline] ▶ ${event.phase.toUpperCase()} (attempt ${event.attempt})`,
+                  );
+                } else if (event.type === "phase_end") {
+                  const icon = event.success ? "✅" : "❌";
+                  console.log(
+                    `[pipeline] ${icon} ${event.phase.toUpperCase()} (${event.durationMs}ms)`,
+                  );
+                } else if (event.type === "validation_result") {
+                  for (const step of event.steps) {
+                    const icon = step.passed ? "✓" : "✗";
+                    console.log(
+                      `  ${icon} ${step.name} (${step.durationMs}ms)`,
+                    );
+                  }
+                }
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: event.type,
+                    payload: event,
+                  }).catch(() => {});
+                }
+              },
+            });
+
+            if (result.executeSuccess) {
+              autoCommit(repoPath, prompt, !!opts.noCommit);
+              console.log("\n✅ pipeline complete");
+              if (result.prUrl) console.log(`PR: ${result.prUrl}`);
+              await finalizeDb("completed", "completed");
+            } else {
+              console.log(
+                "\n❌ pipeline failed (validation did not pass after retries)",
+              );
+              await finalizeDb("failed", "failed");
+            }
+          } catch (err: unknown) {
+            console.error(
+              "\n❌",
+              err instanceof Error ? err.message : String(err),
             );
             await finalizeDb("failed", "failed");
           }

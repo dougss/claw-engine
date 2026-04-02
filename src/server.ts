@@ -50,9 +50,9 @@ export async function createServer(configPath?: string) {
 
       // Health check endpoint
       api.get("/health", async (_request, reply) => {
-        return reply.send({ 
-          status: 'ok', 
-          uptime: process.uptime() 
+        return reply.send({
+          status: "ok",
+          uptime: process.uptime(),
         });
       });
 
@@ -70,7 +70,7 @@ export async function createServer(configPath?: string) {
         }
       });
     },
-    { prefix: "/api" },
+    { prefix: "/api/v1" },
   );
 
   // Serve React dashboard static files in production
@@ -83,8 +83,6 @@ export async function createServer(configPath?: string) {
     await app.register(fastifyStatic, {
       root: dashboardDir,
       prefix: "/",
-      // SPA fallback: serve index.html for unknown routes (except /api)
-      wildcard: false,
     });
     app.setNotFoundHandler(async (_req, reply) => {
       if (!_req.url.startsWith("/api")) {

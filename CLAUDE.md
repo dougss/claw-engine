@@ -140,13 +140,19 @@ npm run build                           # tsc + dashboard build
 
 ## Environment variables
 
-| Var                        | Description                                                          |
-| -------------------------- | -------------------------------------------------------------------- |
-| `CLAW_ENGINE_DATABASE_URL` | Postgres connection string (overrides config)                        |
-| `CLAW_ENGINE_CONFIG`       | Path to config.yaml                                                  |
-| `BAILIAN_SP_API_KEY`       | DashScope API key (classification + opencode via dashscope provider) |
+| Var                            | Required      | Description                                                          |
+| ------------------------------ | ------------- | -------------------------------------------------------------------- |
+| `CLAW_ENGINE_DATABASE_URL`     | no            | Postgres connection string (overrides config)                        |
+| `CLAW_ENGINE_CONFIG`           | no            | Path to config.yaml                                                  |
+| `BAILIAN_SP_API_KEY`           | yes           | DashScope API key (classification + opencode via dashscope provider) |
+| `CLAW_GITHUB_APP_ID`           | pipeline + PR | GitHub App ID — enables bot-attributed commits/PRs via the pipeline  |
+| `CLAW_GITHUB_INSTALLATION_ID`  | pipeline + PR | Installation ID of the app on the target repo                        |
+| `CLAW_GITHUB_PRIVATE_KEY_PATH` | pipeline + PR | Absolute path to the GitHub App private key (.pem)                   |
+| `CLAW_GITHUB_BOT_USER_ID`      | no            | GitHub bot user numeric ID — builds the correct noreply commit email |
 
 **Key**: `BAILIAN_SP_API_KEY` is in `~/.openclaw/secrets/.env`. Source it before running.
+
+GitHub App vars are optional — only needed when running `--pipeline --pr` and wanting commits attributed to `claw-engine[bot]`. See `.env.example` for setup instructions.
 
 ## Port
 

@@ -8,6 +8,11 @@ import {
   type ValidationResult,
   type ExecCommandFn,
 } from "./validation-runner.js";
+import {
+  getInstallationToken,
+  readPrivateKey,
+} from "../integrations/github/github-app-auth.js";
+import { configureGitForApp } from "../integrations/github/git-config.js";
 
 export interface PipelineContext {
   repoPath: string;
@@ -21,6 +26,14 @@ export interface PipelineContext {
   onEvent: (event: HarnessEvent) => void;
   /** Optional MCP config JSON file path — passed to claude -p for PLAN phase. */
   mcpConfigPath?: string;
+  /** GitHub App ID — enables bot-attributed commits and PRs when all three fields are set. */
+  githubAppId?: string;
+  /** GitHub App Installation ID for the target repo. */
+  githubInstallationId?: string;
+  /** Absolute path to the GitHub App private key (.pem). */
+  githubPrivateKeyPath?: string;
+  /** GitHub bot user ID — used to build the noreply commit email (e.g. 12345+claw-engine[bot]@...). */
+  githubBotUserId?: string;
 }
 
 export interface PipelineResult {
@@ -298,11 +311,12 @@ export async function prPhase({
   const exec =
     execGh ??
     (async (args: string[], cwd: string) => {
-      const { execSync } = await import("node:child_process");
-      return execSync(["gh", ...args].join(" "), {
-        cwd,
-        encoding: "utf-8",
-      }).trim();
+      const { spawnSync } = await import("node:child_process");
+      const result = spawnSync("gh", args, { cwd, encoding: "utf-8" });
+      if (result.status !== 0) {
+        throw new Error(result.stderr?.trim() || "gh pr create failed");
+      }
+      return result.stdout.trim();
     });
 
   try {
@@ -348,8 +362,49 @@ export async function runPipeline(
     openPr,
     onEvent,
     mcpConfigPath,
+    githubAppId,
+    githubInstallationId,
+    githubPrivateKeyPath,
+    githubBotUserId,
   } = input;
   const validationSteps = config.validation.typescript;
+
+  // ── GitHub App auth ───────────────────────────────────────────────────────
+  // If all three GitHub App fields are provided, obtain an installation token,
+  // configure git to use it for pushes, and pass GH_TOKEN to the PR phase.
+  let installationToken: string | undefined;
+  if (githubAppId && githubInstallationId && githubPrivateKeyPath) {
+    const privateKey = readPrivateKey(githubPrivateKeyPath);
+    installationToken = await getInstallationToken(
+      githubAppId,
+      githubInstallationId,
+      privateKey,
+    );
+    configureGitForApp({
+      repoPath,
+      token: installationToken,
+      botUserId: githubBotUserId,
+    });
+  }
+
+  // When a token is available, build a GH_TOKEN-aware execGh for the PR phase.
+  let prExecGh: ((args: string[], cwd: string) => Promise<string>) | undefined;
+  if (installationToken) {
+    const token = installationToken;
+    prExecGh = async (args: string[], cwd: string) => {
+      const { spawnSync } = await import("node:child_process");
+      const result = spawnSync("gh", args, {
+        cwd,
+        encoding: "utf-8",
+        env: { ...process.env, GH_TOKEN: token },
+      });
+      if (result.status !== 0) {
+        throw new Error(result.stderr?.trim() || "gh pr create failed");
+      }
+      return result.stdout.trim();
+    };
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   const plan = await planPhase({
     repoPath,
@@ -410,7 +465,14 @@ export async function runPipeline(
     onEvent,
     getDiff: input.getDiff,
   });
-  const prUrl = await prPhase({ repoPath, prompt, review, onEvent, openPr });
+  const prUrl = await prPhase({
+    repoPath,
+    prompt,
+    review,
+    onEvent,
+    openPr,
+    execGh: prExecGh,
+  });
 
   return { plan, executeSuccess: true, validation, review, prUrl };
 }

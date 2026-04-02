@@ -12,12 +12,22 @@ import "@xyflow/react/dist/style.css";
 import {
   fetchWorkItems,
   fetchWorkItem,
+  fetchTaskWithTelemetry,
   type WorkItem,
   type TaskFull,
 } from "../lib/api";
+import {
+  extractPhaseEvents,
+  isPipelineRun,
+  PHASE_ORDER,
+  PHASE_LABELS,
+  PHASE_COLORS,
+  getPhaseStatus,
+  getCurrentPhase,
+  formatDuration,
+  type PhaseEvent,
+} from "../lib/pipeline";
 import { PageHeader, EmptyState } from "../components/ui";
-
-// ── Status color map ──────────────────────────────────────────────────────────
 
 const STATUS_GLOW: Record<
   string,
@@ -71,56 +81,231 @@ const FALLBACK_GLOW = {
   accent: "#5c7a9e",
 };
 
-// ── DAG node ──────────────────────────────────────────────────────────────────
+function buildTaskNodes(
+  tasks: TaskFull[],
+  pipelinePhases: Map<string, PhaseEvent[]>,
+): Node[] {
+  const nodes: Node[] = [];
+  let taskYOffset = 0;
 
-function buildNodes(tasks: TaskFull[]): Node[] {
-  return tasks.map((task, i) => {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
-    const cfg = STATUS_GLOW[task.status] ?? FALLBACK_GLOW;
-    return {
-      id: task.id,
-      position: { x: 60 + col * 280, y: 60 + row * 150 },
-      data: {
-        label: (
-          <div className="space-y-2">
-            <div
-              className="text-xs font-medium leading-snug"
-              style={{ color: "#e8f0fe", fontFamily: "Inter, sans-serif" }}
-            >
-              {task.description.length > 60
-                ? task.description.slice(0, 57) + "…"
-                : task.description}
+  for (const task of tasks) {
+    const phases = pipelinePhases.get(task.id);
+    const hasPipeline = phases && phases.length > 0;
+
+    if (hasPipeline) {
+      const currentPhase = getCurrentPhase(phases);
+      const xBase = 60;
+      const yBase = taskYOffset;
+
+      nodes.push({
+        id: `task-label-${task.id}`,
+        position: { x: xBase, y: yBase },
+        data: {
+          label: (
+            <div className="space-y-1">
+              <div className="text-xs font-medium" style={{ color: "#e8f0fe" }}>
+                {task.description.length > 50
+                  ? task.description.slice(0, 47) + "…"
+                  : task.description}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{
+                    backgroundColor: (STATUS_GLOW[task.status] ?? FALLBACK_GLOW)
+                      .accent,
+                  }}
+                />
+                <span
+                  className="text-[9px] font-mono uppercase tracking-wider"
+                  style={{
+                    color: (STATUS_GLOW[task.status] ?? FALLBACK_GLOW).accent,
+                  }}
+                >
+                  {task.status}
+                </span>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5">
-              <span
-                className="w-1.5 h-1.5 rounded-full"
-                style={{ backgroundColor: cfg.accent }}
-              />
-              <span
-                className="text-[10px] font-mono uppercase tracking-wider"
-                style={{ color: cfg.accent }}
+          ),
+        },
+        style: {
+          background: "linear-gradient(135deg, #0a1628, #0f1f35)",
+          border: `1px solid ${(STATUS_GLOW[task.status] ?? FALLBACK_GLOW).border}`,
+          borderRadius: 12,
+          padding: "10px 14px",
+          minWidth: 220,
+          boxShadow: `0 0 0 1px ${(STATUS_GLOW[task.status] ?? FALLBACK_GLOW).border}22, 0 4px 20px ${(STATUS_GLOW[task.status] ?? FALLBACK_GLOW).shadow}`,
+        },
+      });
+
+      PHASE_ORDER.forEach((phase, pi) => {
+        const status = getPhaseStatus(phase, phases, currentPhase);
+        const colors = PHASE_COLORS[phase];
+        const end = phases.find(
+          (p) => p.phase === phase && p.eventType === "phase_end",
+        );
+        const isPending = status === "pending";
+        const isFailed = status === "failed";
+        const isActive = status === "running";
+
+        nodes.push({
+          id: `phase-${task.id}-${phase}`,
+          position: { x: xBase + 260 + pi * 160, y: yBase + 5 },
+          data: {
+            label: (
+              <div className="space-y-1.5 text-center">
+                <div className="flex items-center justify-center gap-1.5">
+                  <span
+                    className={`font-mono text-[9px] font-bold uppercase tracking-wider ${isActive ? "status-pulse" : ""}`}
+                    style={{
+                      color: isPending
+                        ? "#2e4a6a"
+                        : isFailed
+                          ? "#ff4d6d"
+                          : colors.accent,
+                    }}
+                  >
+                    {PHASE_LABELS[phase]}
+                  </span>
+                  {status === "completed" && (
+                    <svg
+                      width="8"
+                      height="8"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke={colors.accent}
+                      strokeWidth="3"
+                    >
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
+                  {isFailed && (
+                    <svg
+                      width="8"
+                      height="8"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#ff4d6d"
+                      strokeWidth="3"
+                    >
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  )}
+                </div>
+                {end?.durationMs !== undefined && (
+                  <div className="text-[8px] font-mono text-text-dim">
+                    {formatDuration(end.durationMs)}
+                  </div>
+                )}
+              </div>
+            ),
+          },
+          style: {
+            background: isPending ? "rgba(46,74,106,0.08)" : colors.bg,
+            border: `1px solid ${isPending ? "rgba(46,74,106,0.2)" : isFailed ? "rgba(255,77,109,0.4)" : colors.border}`,
+            borderRadius: 10,
+            padding: "8px 12px",
+            minWidth: 90,
+            opacity: isPending ? 0.5 : 1,
+            boxShadow: isActive ? `0 0 12px ${colors.glow}` : "none",
+          },
+        });
+      });
+
+      taskYOffset += 100;
+    } else {
+      const cfg = STATUS_GLOW[task.status] ?? FALLBACK_GLOW;
+      nodes.push({
+        id: task.id,
+        position: { x: 60, y: taskYOffset },
+        data: {
+          label: (
+            <div className="space-y-2">
+              <div
+                className="text-xs font-medium leading-snug"
+                style={{ color: "#e8f0fe" }}
               >
-                {task.status}
-              </span>
+                {task.description.length > 60
+                  ? task.description.slice(0, 57) + "…"
+                  : task.description}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ backgroundColor: cfg.accent }}
+                />
+                <span
+                  className="text-[10px] font-mono uppercase tracking-wider"
+                  style={{ color: cfg.accent }}
+                >
+                  {task.status}
+                </span>
+              </div>
             </div>
-          </div>
-        ),
-      },
-      style: {
-        background: "linear-gradient(135deg, #0a1628, #0f1f35)",
-        border: `1px solid ${cfg.border}`,
-        borderRadius: 12,
-        color: "#e8f0fe",
-        padding: "12px 16px",
-        minWidth: 210,
-        boxShadow: `0 0 0 1px ${cfg.border}22, 0 4px 20px ${cfg.shadow}, inset 0 1px 0 rgba(255,255,255,0.04)`,
-      },
-    };
-  });
+          ),
+        },
+        style: {
+          background: "linear-gradient(135deg, #0a1628, #0f1f35)",
+          border: `1px solid ${cfg.border}`,
+          borderRadius: 12,
+          color: "#e8f0fe",
+          padding: "12px 16px",
+          minWidth: 210,
+          boxShadow: `0 0 0 1px ${cfg.border}22, 0 4px 20px ${cfg.shadow}, inset 0 1px 0 rgba(255,255,255,0.04)`,
+        },
+      });
+      taskYOffset += 120;
+    }
+  }
+
+  return nodes;
 }
 
-// ── Work item selector ────────────────────────────────────────────────────────
+function buildEdges(
+  tasks: TaskFull[],
+  pipelinePhases: Map<string, PhaseEvent[]>,
+): Edge[] {
+  const edges: Edge[] = [];
+
+  for (const task of tasks) {
+    if (task.dependsOn) {
+      for (const depId of task.dependsOn) {
+        edges.push({
+          id: `dep-${depId}->${task.id}`,
+          source: depId,
+          target: pipelinePhases.has(task.id)
+            ? `task-label-${task.id}`
+            : task.id,
+          style: { stroke: "rgba(0,212,255,0.3)", strokeWidth: 1.5 },
+          animated: task.status === "running",
+        });
+      }
+    }
+
+    const phases = pipelinePhases.get(task.id);
+    if (phases && phases.length > 0) {
+      edges.push({
+        id: `task-to-phase-${task.id}`,
+        source: `task-label-${task.id}`,
+        target: `phase-${task.id}-plan`,
+        style: { stroke: "rgba(167,139,250,0.4)", strokeWidth: 1 },
+      });
+
+      for (let i = 0; i < PHASE_ORDER.length - 1; i++) {
+        edges.push({
+          id: `phase-edge-${task.id}-${PHASE_ORDER[i]}-${PHASE_ORDER[i + 1]}`,
+          source: `phase-${task.id}-${PHASE_ORDER[i]}`,
+          target: `phase-${task.id}-${PHASE_ORDER[i + 1]}`,
+          style: { stroke: "rgba(0,212,255,0.2)", strokeWidth: 1 },
+          animated: getCurrentPhase(phases) === PHASE_ORDER[i + 1],
+        });
+      }
+    }
+  }
+
+  return edges;
+}
 
 function WorkItemSelector({
   workItems,
@@ -156,30 +341,19 @@ function WorkItemSelector({
   );
 }
 
-// ── Legend ────────────────────────────────────────────────────────────────────
-
-function buildEdges(tasks: TaskFull[]): Edge[] {
-  const edges: Edge[] = [];
-  for (const task of tasks) {
-    if (!task.dependsOn) continue;
-    for (const depId of task.dependsOn) {
-      edges.push({
-        id: `${depId}->${task.id}`,
-        source: depId,
-        target: task.id,
-        style: { stroke: "rgba(0,212,255,0.3)", strokeWidth: 1.5 },
-        animated: task.status === "running",
-      });
-    }
-  }
-  return edges;
-}
-
-function Legend({ tasks }: { tasks: TaskFull[] }) {
+function Legend({
+  tasks,
+  pipelinePhases,
+}: {
+  tasks: TaskFull[];
+  pipelinePhases: Map<string, PhaseEvent[]>;
+}) {
   const statusCounts = tasks.reduce<Record<string, number>>((acc, t) => {
     acc[t.status] = (acc[t.status] ?? 0) + 1;
     return acc;
   }, {});
+
+  const hasPipeline = pipelinePhases.size > 0;
 
   return (
     <div
@@ -195,7 +369,7 @@ function Legend({ tasks }: { tasks: TaskFull[] }) {
           <span
             key={status}
             className="flex items-center gap-1.5 px-2 py-0.5 rounded-md mr-1"
-            style={{ background: `${cfg.shadow}` }}
+            style={{ background: cfg.shadow }}
           >
             <span
               className="w-1.5 h-1.5 rounded-full"
@@ -208,19 +382,43 @@ function Legend({ tasks }: { tasks: TaskFull[] }) {
               {status}
             </span>
             <span className="text-[10px] font-mono text-text-dim">
-              ×{count}
+              x{count}
             </span>
           </span>
         );
       })}
+      {hasPipeline && (
+        <>
+          <span className="w-px h-3 bg-border-3 mx-2" />
+          {PHASE_ORDER.map((phase) => {
+            const colors = PHASE_COLORS[phase];
+            return (
+              <span
+                key={phase}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md mr-0.5"
+                style={{ background: colors.bg }}
+              >
+                <span
+                  className="w-1 h-1 rounded-full"
+                  style={{ backgroundColor: colors.accent }}
+                />
+                <span
+                  className="text-[9px] font-mono"
+                  style={{ color: colors.accent }}
+                >
+                  {PHASE_LABELS[phase]}
+                </span>
+              </span>
+            );
+          })}
+        </>
+      )}
       <span className="ml-auto text-[10px] font-mono text-text-dim">
         {tasks.length} tasks total
       </span>
     </div>
   );
 }
-
-// ── Page ──────────────────────────────────────────────────────────────────────
 
 export function DagPage() {
   const [searchParams] = useSearchParams();
@@ -229,6 +427,9 @@ export function DagPage() {
     searchParams.get("wi"),
   );
   const [tasks, setTasks] = useState<TaskFull[]>([]);
+  const [pipelinePhases, setPipelinePhases] = useState<
+    Map<string, PhaseEvent[]>
+  >(new Map());
 
   const loadWorkItems = useCallback(() => {
     fetchWorkItems().then(setWorkItems).catch(console.error);
@@ -243,18 +444,51 @@ export function DagPage() {
   useEffect(() => {
     if (!selected) return;
     fetchWorkItem(selected)
-      .then((wi) => setTasks((wi.tasks ?? []) as TaskFull[]))
+      .then(async (wi) => {
+        const taskList = (wi.tasks ?? []) as TaskFull[];
+        setTasks(taskList);
+
+        const phaseMap = new Map<string, PhaseEvent[]>();
+        for (const task of taskList) {
+          try {
+            const tw = await fetchTaskWithTelemetry(task.id);
+            if (isPipelineRun(tw.telemetry)) {
+              phaseMap.set(task.id, extractPhaseEvents(tw.telemetry));
+            }
+          } catch {
+            // skip
+          }
+        }
+        setPipelinePhases(phaseMap);
+      })
       .catch(console.error);
+
     const interval = setInterval(() => {
       fetchWorkItem(selected)
-        .then((wi) => setTasks((wi.tasks ?? []) as TaskFull[]))
+        .then(async (wi) => {
+          const taskList = (wi.tasks ?? []) as TaskFull[];
+          setTasks(taskList);
+
+          const phaseMap = new Map<string, PhaseEvent[]>();
+          for (const task of taskList) {
+            try {
+              const tw = await fetchTaskWithTelemetry(task.id);
+              if (isPipelineRun(tw.telemetry)) {
+                phaseMap.set(task.id, extractPhaseEvents(tw.telemetry));
+              }
+            } catch {
+              // skip
+            }
+          }
+          setPipelinePhases(phaseMap);
+        })
         .catch(console.error);
-    }, 4000);
+    }, 6000);
     return () => clearInterval(interval);
   }, [selected]);
 
-  const nodes: Node[] = buildNodes(tasks);
-  const edges: Edge[] = buildEdges(tasks);
+  const nodes = buildTaskNodes(tasks, pipelinePhases);
+  const edges = buildEdges(tasks, pipelinePhases);
 
   return (
     <div className="flex flex-col h-full animate-fade-in">
@@ -312,7 +546,9 @@ export function DagPage() {
         )}
       </div>
 
-      {selected && tasks.length > 0 && <Legend tasks={tasks} />}
+      {selected && tasks.length > 0 && (
+        <Legend tasks={tasks} pipelinePhases={pipelinePhases} />
+      )}
     </div>
   );
 }

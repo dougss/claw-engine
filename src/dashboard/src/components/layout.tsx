@@ -1,4 +1,28 @@
+import { useState, useEffect, useCallback } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+import { ToastContainer } from "./toast-container";
+import { useSseSubscription } from "../lib/sse-context";
+import { addToast } from "../lib/toast";
+
+function IconPipeline() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <line x1="2" y1="12" x2="22" y2="12" />
+      <circle cx="6" cy="12" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <circle cx="18" cy="12" r="2" />
+    </svg>
+  );
+}
 
 function IconDag() {
   return (
@@ -96,6 +120,12 @@ function LogoMark() {
 }
 
 const NAV = [
+  {
+    to: "/pipeline",
+    label: "Pipeline",
+    Icon: IconPipeline,
+    desc: "Phase tracking",
+  },
   { to: "/dag", label: "DAG", Icon: IconDag, desc: "Task graph" },
   {
     to: "/sessions",
@@ -107,17 +137,84 @@ const NAV = [
   { to: "/logs", label: "Logs", Icon: IconLogs, desc: "Telemetry" },
 ];
 
+function ActiveRunsBadge({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <div
+      className="mx-4 mb-2 flex items-center gap-2 px-3 py-2 rounded-lg border animate-fade-in"
+      style={{
+        background:
+          "linear-gradient(135deg, rgba(0,212,255,0.06), rgba(57,255,140,0.03))",
+        borderColor: "rgba(0,212,255,0.15)",
+      }}
+    >
+      <span
+        className="w-2 h-2 rounded-full bg-status-running status-pulse"
+        style={{ boxShadow: "0 0 8px rgba(0,212,255,0.6)" }}
+      />
+      <span className="font-mono text-[10px] text-accent font-semibold">
+        {count}
+      </span>
+      <span className="font-mono text-[10px] text-text-muted">
+        active run{count > 1 ? "s" : ""}
+      </span>
+    </div>
+  );
+}
+
 export function Layout() {
+  const [activeRuns, setActiveRuns] = useState(0);
+
+  const updateActiveCount = useCallback(() => {
+    fetch("/api/v1/sessions")
+      .then((r) => {
+        if (!r.ok) throw new Error(`sessions: ${r.status}`);
+        return r.json();
+      })
+      .then((data: { sessions: unknown[] }) =>
+        setActiveRuns(data.sessions.length),
+      )
+      .catch(() => {});
+  }, []);
+
+  useSseSubscription((event) => {
+    if (event.type === "session_start" || event.type === "session_end") {
+      updateActiveCount();
+    }
+    if (event.type === "session_end") {
+      const data = event.data as Record<string, unknown>;
+      const reason = data?.reason as string | undefined;
+      if (reason === "completed") {
+        addToast("Run completed successfully", "success");
+      } else if (reason === "error") {
+        addToast("Run failed with error", "error");
+      }
+    }
+    if (event.type === "phase_start") {
+      const data = event.data as Record<string, unknown>;
+      const phase = data?.phase as string;
+      if (phase) {
+        addToast(`Phase ${phase.toUpperCase()} started`, "info");
+      }
+    }
+  });
+
+  useEffect(() => {
+    updateActiveCount();
+    const interval = setInterval(updateActiveCount, 15_000);
+    return () => clearInterval(interval);
+  }, [updateActiveCount]);
+
   return (
     <div className="flex h-screen bg-bg text-text-primary overflow-hidden">
-      {/* Sidebar */}
+      <ToastContainer />
+
       <aside
         className="w-52 shrink-0 flex flex-col border-r border-border-2"
         style={{
           background: "linear-gradient(180deg, #0a1628 0%, #050a0f 100%)",
         }}
       >
-        {/* Brand */}
         <div className="px-4 py-5 border-b border-border-2">
           <div className="flex items-center gap-3">
             <div
@@ -141,14 +238,14 @@ export function Layout() {
           </div>
         </div>
 
-        {/* Divider label */}
-        <div className="px-4 pt-4 pb-1.5">
+        <ActiveRunsBadge count={activeRuns} />
+
+        <div className="px-4 pt-3 pb-1.5">
           <p className="text-[9px] font-mono text-text-dim tracking-widest uppercase">
             Navigation
           </p>
         </div>
 
-        {/* Navigation */}
         <nav
           className="flex-1 px-2.5 pb-3 space-y-0.5"
           aria-label="Main navigation"
@@ -195,13 +292,12 @@ export function Layout() {
           ))}
         </nav>
 
-        {/* Footer */}
         <div
           className="px-4 py-3 border-t border-border-2 flex items-center justify-between"
           style={{ background: "rgba(0,0,0,0.2)" }}
         >
           <span className="font-mono text-[9px] text-text-dim tracking-widest">
-            v0.1.0
+            v0.2.0
           </span>
           <span className="flex items-center gap-1.5">
             <span
@@ -215,7 +311,6 @@ export function Layout() {
         </div>
       </aside>
 
-      {/* Main */}
       <main className="flex-1 overflow-y-auto min-w-0 bg-bg">
         <Outlet />
       </main>
