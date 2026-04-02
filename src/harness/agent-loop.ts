@@ -199,17 +199,18 @@ export async function* runAgentLoop({
         if (!handler) {
           if (mcpCallTool && isMcpTool(event.name)) {
             const result = await mcpCallTool(event.name, event.input);
+            const truncatedOutput = truncateOutput(result.output, FALLBACK_MAX_RESULT_SIZE);
             yield {
               type: "tool_result",
               id: event.id,
-              output: result.output,
+              output: truncatedOutput,
               isError: result.isError,
             };
             turnToolResults.push(
               createToolMessage({
                 toolUseId: event.id,
                 toolName: event.name,
-                output: result.output,
+                output: truncatedOutput,
               }),
             );
             continue;
