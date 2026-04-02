@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { runClaudePipe } from "../../../integrations/claude-p/claude-pipe.js";
 import type { ToolHandler } from "../tool-types.js";
 
@@ -8,12 +6,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const MAX_CONCURRENT_AGENTS = 3;
-const activeAgents = new Set<string>();
+
+/**
+ * Tracks running agents (both background and foreground): taskId → Promise<string>.
+ * Module-level so the limit is shared across all tool invocations.
+ */
+const backgroundAgents = new Map<string, Promise<string>>();
+
+/** Monotonic counter appended to Date.now() to guarantee unique IDs within a ms. */
+let _agentSeq = 0;
+function makeAgentId(): string {
+  return `agent-${Date.now()}-${++_agentSeq}`;
+}
 
 export const spawnAgentTool: ToolHandler = {
   name: "spawn_agent",
   description:
-    "Spawn a sub-agent via claude -p. Foreground (default) blocks and returns full output. Background spawns detached and returns an agent ID.",
+    "Spawn a sub-agent via claude -p. Foreground (default) blocks and returns full output. Background spawns without waiting and returns a taskId.",
   inputSchema: {
     type: "object",
     properties: {
@@ -25,6 +34,11 @@ export const spawnAgentTool: ToolHandler = {
         type: "string",
         description:
           "Working directory for the agent (defaults to current workspace)",
+      },
+      worktree: {
+        type: "string",
+        description:
+          "Optional worktree path override (future: real worktree creation). Currently treated as workspacePath override.",
       },
       maxTurns: {
         type: "number",
@@ -46,69 +60,67 @@ export const spawnAgentTool: ToolHandler = {
       };
     }
 
-    if (activeAgents.size >= MAX_CONCURRENT_AGENTS) {
+    if (backgroundAgents.size >= MAX_CONCURRENT_AGENTS) {
       return {
-        output: `max concurrent agents reached (${MAX_CONCURRENT_AGENTS}). Wait for an agent to finish.`,
+        output: `max concurrent sub-agents (${MAX_CONCURRENT_AGENTS}) reached`,
         isError: true,
       };
     }
 
     const prompt = input.prompt;
+
+    // worktree param is treated as a workspacePath override for now
+    const worktreeOverride =
+      typeof input.worktree === "string" && input.worktree.length > 0
+        ? input.worktree
+        : undefined;
+
     const workspacePath =
-      typeof input.workspacePath === "string" && input.workspacePath.length > 0
+      worktreeOverride ??
+      (typeof input.workspacePath === "string" && input.workspacePath.length > 0
         ? input.workspacePath
-        : context.workspacePath;
+        : context.workspacePath);
+
     const maxTurns =
       typeof input.maxTurns === "number" && Number.isFinite(input.maxTurns)
         ? Math.max(1, Math.floor(input.maxTurns))
         : undefined;
+
     const background = input.background === true;
     const claudeBin = process.env.CLAUDE_BIN ?? "claude";
 
     if (background) {
-      const agentId = randomUUID();
-      const args = [
-        "-p",
-        prompt,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-      ];
-      if (maxTurns !== undefined) args.push("--max-turns", String(maxTurns));
+      const taskId = makeAgentId();
 
-      try {
-        const child = spawn(claudeBin, args, {
-          cwd: workspacePath,
-          stdio: "ignore",
-          detached: true,
-        });
+      const promise = (async (): Promise<string> => {
+        let output = "";
+        for await (const event of runClaudePipe({
+          prompt,
+          workspacePath,
+          claudeBin,
+          maxTurns,
+        })) {
+          if (event.type === "text_delta") {
+            output += event.text;
+          }
+        }
+        return output;
+      })().finally(() => {
+        backgroundAgents.delete(taskId);
+      });
 
-        activeAgents.add(agentId);
+      backgroundAgents.set(taskId, promise);
 
-        const cleanup = () => {
-          activeAgents.delete(agentId);
-        };
-
-        child.on("close", cleanup);
-        child.on("error", cleanup);
-        child.unref();
-
-        return {
-          output: JSON.stringify({ agentId, status: "backgrounded" }),
-          isError: false,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          output: `failed to spawn background agent: ${message}`,
-          isError: true,
-        };
-      }
+      return {
+        output: JSON.stringify({ taskId, status: "backgrounded" }),
+        isError: false,
+      };
     }
 
-    // Foreground: use runClaudePipe and accumulate text_delta events
-    const agentId = randomUUID();
-    activeAgents.add(agentId);
+    // ── Foreground: use runClaudePipe and accumulate text_delta events ──────────
+    const taskId = makeAgentId();
+    const placeholder = Promise.resolve("");
+    backgroundAgents.set(taskId, placeholder);
 
     try {
       let output = "";
@@ -128,7 +140,7 @@ export const spawnAgentTool: ToolHandler = {
       const message = error instanceof Error ? error.message : String(error);
       return { output: `agent failed: ${message}`, isError: true };
     } finally {
-      activeAgents.delete(agentId);
+      backgroundAgents.delete(taskId);
     }
   },
 };
