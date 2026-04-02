@@ -31,8 +31,33 @@ import { editFileTool } from "../../harness/tools/builtins/edit-file.js";
 import { bashTool } from "../../harness/tools/builtins/bash.js";
 import { globTool } from "../../harness/tools/builtins/glob-tool.js";
 import { grepTool } from "../../harness/tools/builtins/grep-tool.js";
+import { execSync } from "node:child_process";
 
 export function registerRunCommand(program: import("commander").Command) {
+
+function autoCommit(repoPath: string, prompt: string, noCommit: boolean): void {
+  if (noCommit) {
+    console.log("[git] skipping auto-commit due to --no-commit flag");
+    return;
+  }
+
+  const statusOutput = execSync(`git -C "${repoPath}" status --porcelain`, { encoding: 'utf-8' });
+  
+  if (!statusOutput.trim()) {
+    console.log("[git] nothing to commit");
+    return;
+  }
+
+  execSync(`git -C "${repoPath}" add -A`, { stdio: 'inherit' });
+  
+  // Truncate prompt to 72 characters for commit message
+  const commitMessage = prompt.length > 72 
+    ? `claw: ${prompt.substring(0, 72)}`
+    : `claw: ${prompt}`;
+    
+  execSync(`git -C "${repoPath}" commit -m "${commitMessage}"`, { stdio: 'inherit' });
+  console.log("[git] committed changes");
+}
   program
     .command("run <repo> <prompt>")
     .description("Run a single task directly in a repo")
@@ -42,6 +67,7 @@ export function registerRunCommand(program: import("commander").Command) {
     .option("--max-turns <n>", "Maximum agent turns", parseInt)
     .option("--no-resume", "Disable auto-resume on checkpoint")
     .option("--resume <sessionId>", "Resume a previous session by ID")
+    .option("--no-commit", "Skip automatic git commit of changes")
     .action(
       async (
         repo: string,
@@ -53,6 +79,7 @@ export function registerRunCommand(program: import("commander").Command) {
           maxTurns?: number;
           resume?: boolean | string;
           noResume?: boolean;
+          noCommit?: boolean;
         },
       ) => {
         const repoPath = resolve(repo);
@@ -177,6 +204,7 @@ export function registerRunCommand(program: import("commander").Command) {
                 process.stderr.write("\n");
                 if (event.reason === "completed") {
                   console.log("\n✅ done");
+                  autoCommit(repoPath, prompt, !!opts.noCommit);
                 } else if (event.reason === "interrupted") {
                   console.log("\n⏹  interrupted");
                 } else {
@@ -389,6 +417,7 @@ export function registerRunCommand(program: import("commander").Command) {
 
                 if (reason === "completed") {
                   console.log("\n✅ done");
+                  autoCommit(repoPath, prompt, !!opts.noCommit);
                 } else if (reason === "checkpoint") {
                   if (autoResume && resumeCount < MAX_RESUMES) {
                     resumeCount++;
