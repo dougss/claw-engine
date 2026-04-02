@@ -15,6 +15,8 @@ import {
   PHASE_COLORS,
   getPhaseStatus,
   type PhaseEvent,
+  getPhaseOutput,
+  type PhaseOutput,
 } from "../lib/pipeline";
 import { PhaseTimeline } from "../components/phase-timeline";
 import { PageHeader, StatusBadge, EmptyState } from "../components/ui";
@@ -90,22 +92,62 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
 }) {
   const currentPhase = getCurrentPhase(phases);
   const telemetry = task.telemetry;
+  
+  // Initialize state to auto-select first completed or current phase
+  const [selectedPhase, setSelectedPhase] = useState(() => {
+    // Find first completed phase
+    const completedPhase = PHASE_ORDER.find(phase => 
+      getPhaseStatus(phase, phases, currentPhase) === 'completed'
+    );
+    // If no completed phase, try current phase
+    if (completedPhase) return completedPhase;
+    if (currentPhase) return currentPhase;
+    // Otherwise just pick the first phase
+    return PHASE_ORDER[0];
+  });
+  
+  const [showExecutionLogs, setShowExecutionLogs] = useState(false);
+  const [showValidations, setShowValidations] = useState(true);
 
-  const planOutput = telemetry
-    .filter((t) => t.eventType === "text_delta")
-    .map((t) => {
-      const d = t.data as Record<string, unknown>;
-      return typeof d.text === "string" ? d.text : "";
-    })
-    .join("");
-
+  // Get validation results
   const validationResults = telemetry.filter(
     (t) => t.eventType === "validation_result",
   );
 
+  // Get phase output for selected phase
+  const phaseOutput: PhaseOutput = getPhaseOutput(selectedPhase, telemetry);
+
+  // Check if selected phase has been attempted
+  const isPhaseAttempted = phases.some(p => 
+    p.phase === selectedPhase && p.eventType === "phase_start"
+  );
+
+  // Extract PR URL if this is the PR phase
+  let prUrl: string | null = null;
+  if (selectedPhase === 'pr') {
+    // Look for session_end events with GitHub URL in result
+    for (const event of telemetry) {
+      if (event.eventType === 'session_end') {
+        const dataRecord = event.data as Record<string, unknown>;
+        const result = dataRecord.result;
+        if (typeof result === 'string' && result.includes('github.com')) {
+          prUrl = result;
+          break;
+        }
+      } else if (event.eventType === 'text_delta') {
+        const dataRecord = event.data as Record<string, unknown>;
+        const text = dataRecord.text;
+        if (typeof text === 'string' && text.includes('github.com')) {
+          prUrl = text;
+          break;
+        }
+      }
+    }
+  }
+
   return (
     <div className="space-y-4 animate-fade-in">
-      {/* Phase grid */}
+      {/* Section A: Interactive Phase Timeline */}
       <div
         className="rounded-xl border border-border-2 overflow-hidden"
         style={{ background: "linear-gradient(135deg, #0a1628, #0d1b30)" }}
@@ -129,18 +171,24 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
                 (p) => p.phase === phase && p.eventType === "phase_start",
               ).length;
 
+              const isSelected = selectedPhase === phase;
+
               return (
-                <div
+                <button
                   key={phase}
-                  className="rounded-lg border p-3 space-y-1"
+                  onClick={() => setSelectedPhase(phase)}
+                  className="rounded-lg border p-3 space-y-1 transition-all duration-200 focus:outline-none"
                   style={{
                     background:
                       status !== "pending" ? colors.bg : "rgba(46,74,106,0.06)",
                     borderColor:
-                      status !== "pending"
-                        ? colors.border
-                        : "rgba(46,74,106,0.2)",
+                      isSelected 
+                        ? colors.accent 
+                        : (status !== "pending" ? colors.border : "rgba(46,74,106,0.2)"),
                     opacity: status === "pending" ? 0.5 : 1,
+                    boxShadow: isSelected 
+                      ? `0 0 0 2px ${colors.accent}, 0 0 10px ${colors.glow}`
+                      : "none",
                   }}
                 >
                   <div className="flex items-center justify-between">
@@ -197,127 +245,273 @@ const PhaseDetailPanel = memo(function PhaseDetailPanel({
                       attempt {attempts}
                     </p>
                   )}
-                </div>
+                </button>
               );
             })}
           </div>
         </div>
       </div>
 
-      {/* Validation results */}
-      {validationResults.length > 0 && (
-        <div
-          className="rounded-xl border border-border-2 overflow-hidden"
-          style={{ background: "linear-gradient(135deg, #0a1628, #0d1b30)" }}
+      {/* Section B: Phase Output */}
+      <div
+        className="rounded-xl border border-border-2 overflow-hidden"
+        style={{ background: "linear-gradient(135deg, #0a1628, #0d1b30)" }}
+      >
+        <div className="px-5 py-3 border-b border-border-2">
+          <h3 className="text-sm font-semibold text-text-primary">
+            {selectedPhase === 'plan' ? 'Plan' : 
+             selectedPhase === 'review' ? 'Review' : 
+             selectedPhase === 'pr' ? 'Pull Request' : 
+             'Output'}
+          </h3>
+        </div>
+        <div className="p-4">
+          {!isPhaseAttempted ? (
+            <p className="font-mono text-xs text-text-dim italic">
+              Select a phase to see its output
+            </p>
+          ) : (
+            <>
+              {/* Text Content */}
+              {phaseOutput.textContent && (
+                <div className="mb-4 max-h-80 overflow-y-auto">
+                  <pre className="text-[11px] font-mono text-text-secondary whitespace-pre-wrap leading-relaxed">
+                    {phaseOutput.textContent}
+                  </pre>
+                </div>
+              )}
+
+              {/* Tool Calls */}
+              {phaseOutput.toolCalls.length > 0 && (
+                <div className="mb-4">
+                  <details className="group">
+                    <summary className="cursor-pointer font-mono text-xs text-text-primary mb-2 flex items-center gap-2">
+                      <span>Tool Calls ({phaseOutput.toolCalls.length})</span>
+                      <svg 
+                        className="w-3 h-3 transition-transform group-open:rotate-90" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        viewBox="0 0 24 24"
+                      >
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                      </svg>
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      {phaseOutput.toolCalls.map((call, index) => (
+                        <div 
+                          key={index}
+                          className="p-2 rounded border bg-bg-secondary text-xs font-mono"
+                          style={{ 
+                            borderColor: "rgba(15,31,53,0.5)",
+                            background: "rgba(10,22,40,0.5)"
+                          }}
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            <span 
+                              className="text-xs font-mono font-bold"
+                              style={{ color: PHASE_COLORS[selectedPhase].accent }}
+                            >
+                              {call.name}
+                            </span>
+                            <span className="text-text-dim text-[10px]">
+                              {new Date(call.createdAt).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <div className="text-text-secondary overflow-x-auto">
+                            {JSON.stringify(call.input, null, 2)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+
+              {/* PR URL */}
+              {selectedPhase === 'pr' && prUrl && (
+                <div className="mb-4">
+                  <p className="font-mono text-xs text-text-primary mb-1">Pull Request URL:</p>
+                  <a 
+                    href={prUrl} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="font-mono text-xs text-accent hover:underline break-all"
+                  >
+                    {prUrl}
+                  </a>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Section C: Collapsible sections */}
+      {/* Execution Logs */}
+      <div
+        className="rounded-xl border border-border-2 overflow-hidden"
+        style={{ background: "linear-gradient(135deg, #0a1628, #0d1b30)" }}
+      >
+        <button
+          className="w-full px-5 py-3 border-b border-border-2 flex items-center justify-between focus:outline-none"
+          onClick={() => setShowExecutionLogs(!showExecutionLogs)}
+          style={{ background: "transparent" }}
         >
-          <div className="px-5 py-3 border-b border-border-2">
-            <h3 className="text-sm font-semibold text-text-primary">
-              Validation Results
-            </h3>
+          <h3 className="text-sm font-semibold text-text-primary">
+            Execution Logs
+          </h3>
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-[9px] text-text-dim">
+              {phaseOutput.toolCalls.length} events
+            </span>
+            <svg 
+              className={`w-4 h-4 transition-transform ${showExecutionLogs ? 'rotate-90' : ''}`} 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
           </div>
-          <div className="p-4 space-y-2">
-            {validationResults.map((vr, vi) => {
-              const data = vr.data as Record<string, unknown>;
-              const passed = data.passed === true;
-              const steps = Array.isArray(data.steps)
-                ? (data.steps as Array<{
-                    name: string;
-                    passed: boolean;
-                    output: string;
-                    durationMs: number;
-                  }>)
-                : [];
-              return (
-                <div key={vi} className="space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md"
-                      style={{
-                        background: passed
-                          ? "rgba(57,255,140,0.1)"
-                          : "rgba(255,77,109,0.1)",
-                        color: passed ? "#39ff8c" : "#ff4d6d",
-                      }}
-                    >
-                      {passed ? "PASS" : "FAIL"}
-                    </span>
-                    <span className="text-[10px] font-mono text-text-dim">
-                      attempt {vi + 1}
-                    </span>
-                  </div>
-                  {steps.map((step, si) => (
-                    <div
-                      key={si}
-                      className="flex items-center gap-2 pl-3 py-1 rounded-lg"
-                      style={{
-                        background: step.passed
-                          ? "rgba(57,255,140,0.04)"
-                          : "rgba(255,77,109,0.04)",
-                      }}
-                    >
-                      <span className="shrink-0">
-                        {step.passed ? (
-                          <svg
-                            width="10"
-                            height="10"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="#39ff8c"
-                            strokeWidth="2.5"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        ) : (
-                          <svg
-                            width="10"
-                            height="10"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="#ff4d6d"
-                            strokeWidth="2.5"
-                          >
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                          </svg>
-                        )}
+        </button>
+        
+        {showExecutionLogs && (
+          <div className="p-4 max-h-64 overflow-y-auto">
+            {phaseOutput.toolCalls.length > 0 ? (
+              <div className="divide-y" style={{ borderColor: "rgba(15,31,53,0.5)" }}>
+                {phaseOutput.toolCalls.map((call, index) => (
+                  <div key={index} className="py-2.5 font-mono text-xs">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span 
+                        className="font-mono font-bold"
+                        style={{ color: PHASE_COLORS[selectedPhase].accent }}
+                      >
+                        [{call.name}]
                       </span>
-                      <span className="text-[11px] font-mono text-text-secondary flex-1 min-w-0 truncate">
-                        {step.name}
-                      </span>
-                      <span className="text-[9px] font-mono text-text-dim shrink-0">
-                        {formatDuration(step.durationMs)}
+                      <span className="text-text-dim truncate">
+                        {JSON.stringify(call.input).substring(0, 60)}
+                        {JSON.stringify(call.input).length > 60 && '...'}
                       </span>
                     </div>
-                  ))}
-                </div>
-              );
-            })}
+                    <div className="text-[9px] text-text-dim ml-2">
+                      {new Date(call.createdAt).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="font-mono text-xs text-text-dim italic">
+                No execution logs for this phase
+              </p>
+            )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Text output */}
-      {planOutput.length > 0 && (
+      {/* Validations */}
+      {(validationResults.length > 0 || phaseOutput.validations.length > 0) && (
         <div
           className="rounded-xl border border-border-2 overflow-hidden"
           style={{ background: "linear-gradient(135deg, #0a1628, #0d1b30)" }}
         >
-          <div className="px-5 py-3 border-b border-border-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-text-primary">Output</h3>
-            <span className="font-mono text-[9px] text-text-dim">
-              {(planOutput.length / 1000).toFixed(1)}k chars
-            </span>
-          </div>
-          <div className="p-4 max-h-64 overflow-y-auto">
-            <pre className="text-[11px] font-mono text-text-secondary whitespace-pre-wrap leading-relaxed">
-              {planOutput.slice(0, 3000)}
-              {planOutput.length > 3000 && (
-                <span className="text-text-dim">
-                  … ({((planOutput.length - 3000) / 1000).toFixed(1)}k more)
-                </span>
-              )}
-            </pre>
-          </div>
+          <button
+            className="w-full px-5 py-3 border-b border-border-2 flex items-center justify-between focus:outline-none"
+            onClick={() => setShowValidations(!showValidations)}
+            style={{ background: "transparent" }}
+          >
+            <h3 className="text-sm font-semibold text-text-primary">
+              Validations
+            </h3>
+            <svg 
+              className={`w-4 h-4 transition-transform ${showValidations ? 'rotate-90' : ''}`} 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+          </button>
+          
+          {showValidations && (
+            <div className="p-4 space-y-2">
+              {validationResults.map((vr, vi) => {
+                const data = vr.data as Record<string, unknown>;
+                const passed = data.passed === true;
+                const steps = Array.isArray(data.steps)
+                  ? (data.steps as Array<{
+                      name: string;
+                      passed: boolean;
+                      output: string;
+                      durationMs: number;
+                    }>)
+                  : [];
+                return (
+                  <div key={vi} className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                        style={{
+                          background: passed
+                            ? "rgba(57,255,140,0.1)"
+                            : "rgba(255,77,109,0.1)",
+                          color: passed ? "#39ff8c" : "#ff4d6d",
+                        }}
+                      >
+                        {passed ? "PASS" : "FAIL"}
+                      </span>
+                      <span className="text-[10px] font-mono text-text-dim">
+                        attempt {vi + 1}
+                      </span>
+                    </div>
+                    {steps.map((step, si) => (
+                      <div
+                        key={si}
+                        className="flex items-center gap-2 pl-3 py-1 rounded-lg"
+                        style={{
+                          background: step.passed
+                            ? "rgba(57,255,140,0.04)"
+                            : "rgba(255,77,109,0.04)",
+                        }}
+                      >
+                        <span className="shrink-0">
+                          {step.passed ? (
+                            <svg
+                              width="10"
+                              height="10"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="#39ff8c"
+                              strokeWidth="2.5"
+                            >
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          ) : (
+                            <svg
+                              width="10"
+                              height="10"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="#ff4d6d"
+                              strokeWidth="2.5"
+                            >
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          )}
+                        </span>
+                        <span className="text-[11px] font-mono text-text-secondary flex-1 min-w-0 truncate">
+                          {step.name}
+                        </span>
+                        <span className="text-[9px] font-mono text-text-dim shrink-0">
+                          {formatDuration(step.durationMs)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
