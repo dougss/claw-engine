@@ -35,6 +35,7 @@ export interface PipelineContext {
   githubPrivateKeyPath?: string;
   /** GitHub bot user ID — used to build the noreply commit email (e.g. 12345+claw-engine[bot]@...). */
   githubBotUserId?: string;
+  maxReviewRetries?: number;  // default 1
 }
 
 export interface PipelineResult {
@@ -43,6 +44,7 @@ export interface PipelineResult {
   validation: ValidationResult;
   review: string;
   prUrl: string | null;
+  reviewPassed: boolean;
 }
 
 // ── GIT COMMIT + PUSH ─────────────────────────────────────────────────────────
@@ -58,7 +60,8 @@ function gitCommitAndPush(repoPath: string, prompt: string): string {
     opts,
   ).trim();
   let branch = currentBranch;
-  if (currentBranch === "main" || currentBranch === "master") {
+  const defaultBranch = getDefaultBranch(repoPath);
+  if (currentBranch === defaultBranch || currentBranch === "HEAD") {
     branch = `claw/run-${Date.now()}`;
     execSync(`git checkout -b ${branch}`, opts);
   }
@@ -317,6 +320,7 @@ interface PrPhaseInput {
   openPr?: boolean;
   execGh?: (args: string[], cwd: string) => Promise<string>;
   branch?: string;
+  baseBranch?: string;
 }
 
 export async function prPhase({
@@ -327,6 +331,7 @@ export async function prPhase({
   openPr = true,
   execGh,
   branch,
+  baseBranch,
 }: PrPhaseInput): Promise<string | null> {
   if (!openPr) return null;
 
@@ -352,7 +357,7 @@ export async function prPhase({
   try {
     const args = ["pr", "create", "--title", title, "--body", review];
     if (branch) {
-      args.push("--base", "main", "--head", branch);
+      args.push("--base", baseBranch ?? getDefaultBranch(repoPath), "--head", branch);
     }
     const url = await exec(args, repoPath);
     const durationMs = Date.now() - start;
@@ -362,6 +367,36 @@ export async function prPhase({
     const durationMs = Date.now() - start;
     onEvent({ type: "phase_end", phase: "pr", success: false, durationMs });
     throw new Error(`PR phase failed: ${err.message}`);
+  }
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+
+function parseReviewVerdict(review: string): 'APPROVE' | 'REQUEST_CHANGES' {
+  const upper = review.toUpperCase();
+  // Look for explicit APPROVE anywhere — check APPROVE before REQUEST_CHANGES
+  // to avoid false-match on \"not APPROVE\"
+  if (upper.includes('VERDICT') && upper.includes('REQUEST_CHANGES')) {
+    return 'REQUEST_CHANGES';
+  }
+  if (upper.includes('VERDICT') && upper.includes('APPROVE')) {
+    return 'APPROVE';
+  }
+  // Fallback: last line heuristic
+  const lastLines = review.trim().split('\n').slice(-5).join(' ').toUpperCase();
+  if (lastLines.includes('REQUEST_CHANGES')) return 'REQUEST_CHANGES';
+  return 'APPROVE'; // default to approve if unclear
+}
+
+function getDefaultBranch(repoPath: string): string {
+  const { execSync } = require('node:child_process');
+  try {
+    const ref = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
+      cwd: repoPath, encoding: 'utf-8'
+    }).trim();
+    return ref.replace('refs/remotes/origin/', '');
+  } catch {
+    return 'main'; // fallback
   }
 }
 
@@ -392,6 +427,7 @@ export async function runPipeline(
     githubBotUserId,
   } = input;
   const validationSteps = config.validation.typescript;
+  const maxReviewRetries = input.maxReviewRetries ?? 1;
 
   // ── GitHub App auth ───────────────────────────────────────────────────────
   // If all three GitHub App fields are provided, obtain an installation token,
@@ -479,17 +515,62 @@ export async function runPipeline(
   }
 
   if (!executeSuccess) {
-    return { plan, executeSuccess: false, validation, review: "", prUrl: null };
+    return { plan, executeSuccess: false, validation, review: "", prUrl: null, reviewPassed: false };
   }
 
-  const review = await reviewPhase({
-    repoPath,
-    prompt,
-    claudeBin,
-    onEvent,
-    getDiff: input.getDiff,
-  });
+  let review = '';
+  let prUrl: string | null = null;
+  let reviewPassed = false;
+  let reviewAttempt = 0;
+  let executeAttemptOffset = maxRetries + 1; // continue numbering from where validate left off
 
+  while (reviewAttempt <= maxReviewRetries) {
+    reviewAttempt++;
+
+    review = await reviewPhase({
+      repoPath,
+      prompt,
+      claudeBin,
+      onEvent,
+      getDiff: input.getDiff,
+    });
+
+    const verdict = parseReviewVerdict(review);
+
+    if (verdict === 'APPROVE' || reviewAttempt > maxReviewRetries) {
+      reviewPassed = verdict === 'APPROVE';
+      break;
+    }
+
+    // REQUEST_CHANGES — loop back: execute to fix, then validate
+    console.log(`[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`);
+
+    await executePhase({
+      repoPath,
+      prompt,
+      plan,
+      previousError: `Code review requested changes:\n${review}`,
+      opencodeBin,
+      opencodeModel,
+      onEvent,
+      attempt: executeAttemptOffset + reviewAttempt,
+    });
+
+    const fixValidation = await validatePhase({
+      repoPath,
+      validationSteps,
+      onEvent,
+      execCommand: input.execCommand,
+      attempt: executeAttemptOffset + reviewAttempt,
+    });
+
+    if (!fixValidation.passed) {
+      // Validation failed after review fix — abort
+      return { plan, executeSuccess: false, validation: fixValidation, review, prUrl: null, reviewPassed: false };
+    }
+  }
+
+  // Commit, push, PR
   let prBranch: string | undefined;
   if (openPr) {
     try {
@@ -499,7 +580,8 @@ export async function runPipeline(
     }
   }
 
-  const prUrl = await prPhase({
+  const defaultBranch = getDefaultBranch(repoPath);
+  prUrl = await prPhase({
     repoPath,
     prompt,
     review,
@@ -507,7 +589,8 @@ export async function runPipeline(
     openPr,
     execGh: prExecGh,
     branch: prBranch,
+    baseBranch: defaultBranch,
   });
 
-  return { plan, executeSuccess: true, validation, review, prUrl };
+  return { plan, executeSuccess: true, validation, review, prUrl, reviewPassed };
 }
