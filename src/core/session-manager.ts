@@ -10,6 +10,10 @@ import {
   createPostgresSessionStore,
   type SessionStore,
 } from "../harness/session-store.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { exec } from "node:child_process";
+import { runValidation } from "./validation-runner.js";
 
 /** Checkpoint data from a previous session used to resume work. */
 export interface ResumeCheckpoint {
@@ -129,6 +133,50 @@ export async function runSingleSession({
     events.push(event);
     if (event.type === "session_end") {
       endReason = event.reason;
+    }
+  }
+
+  if (endReason === "completed") {
+    const hasPackageJson = existsSync(join(workspacePath, "package.json"));
+    const hasTsConfig = existsSync(join(workspacePath, "tsconfig.json"));
+    if (hasPackageJson || hasTsConfig) {
+      runValidation({
+        workspacePath,
+        steps: [
+          {
+            name: "typecheck",
+            command: "npx tsc --noEmit",
+            required: true,
+            retryable: false,
+          },
+        ],
+        execCommand: (command, cwd) =>
+          new Promise((resolve) => {
+            exec(command, { cwd }, (err, stdout) => {
+              resolve({
+                stdout: stdout || (err?.message ?? ""),
+                exitCode: err ? 1 : 0,
+              });
+            });
+          }),
+      })
+        .then((result) => {
+          if (!result.passed) {
+            const failed = result.steps
+              .filter((s) => !s.passed)
+              .map((s) => s.name)
+              .join(", ");
+            console.warn(
+              `[session-manager] post-session validation failed: ${failed}`,
+            );
+          }
+        })
+        .catch((err) => {
+          console.warn(
+            "[session-manager] validation error (non-fatal):",
+            err instanceof Error ? err.message : err,
+          );
+        });
     }
   }
 

@@ -3,6 +3,10 @@ loadDefaultEnvFiles();
 import { createServer } from "./server.js";
 import { reconcileOnStartup } from "./core/reconcile.js";
 import { closeDb } from "./storage/db.js";
+import {
+  checkSessionHealth,
+  type SessionHealth,
+} from "./core/health-monitor.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -40,9 +44,24 @@ async function main(): Promise<void> {
     `[claw-engine] listening on ${config.engine.host}:${config.engine.port}`,
   );
 
+  // Periodic health check — sessions register themselves here as they start
+  const activeSessions = new Map<string, SessionHealth>();
+  const healthCheckInterval = setInterval(() => {
+    for (const [, session] of activeSessions) {
+      const result = checkSessionHealth(session);
+      if (result.action === "kill") {
+        console.warn(
+          `[health-monitor] stalled session detected: ${result.sessionId} — ${result.reason}`,
+        );
+      }
+    }
+  }, 30_000);
+  healthCheckInterval.unref();
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`[claw-engine] received ${signal}, shutting down...`);
+    clearInterval(healthCheckInterval);
     await app.close();
     await redis.quit();
     await closeDb();

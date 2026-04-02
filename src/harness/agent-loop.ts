@@ -13,6 +13,9 @@ import {
   evaluatePermission,
   type PermissionRule,
 } from "./permissions.js";
+import { classifyError } from "../core/error-classifier.js";
+
+const FATAL_ERROR_CATEGORIES = new Set(["auth"]);
 
 const SUMMARY_PROMPT =
   "You are approaching the context limit. Please summarize what you have accomplished so far and what still needs to be done, so work can resume seamlessly in a new session. Be concise.";
@@ -76,7 +79,7 @@ const FALLBACK_MAX_RESULT_SIZE = 50000;
 function truncateOutput(output: string, maxChars: number): string {
   if (output.length <= maxChars || maxChars === Infinity) return output;
   return (
-    output.slice(0, maxChars) + 
+    output.slice(0, maxChars) +
     `\n... [output truncated at ${maxChars} chars. Use more specific commands or add offset/limit params]`
   );
 }
@@ -132,119 +135,133 @@ export async function* runAgentLoop({
     const turnToolCalls: ToolCallRecord[] = [];
     const turnToolResults: Message[] = [];
 
-    for await (const event of adapter.chat(messages, tools)) {
-      yield event;
+    try {
+      for await (const event of adapter.chat(messages, tools)) {
+        yield event;
 
-      if (event.type === "text_delta") {
-        assistantText += event.text;
-      }
+        if (event.type === "text_delta") {
+          assistantText += event.text;
+        }
 
-      if (event.type === "token_update") {
-        if (event.percent > highestPercent) highestPercent = event.percent;
-      }
+        if (event.type === "token_update") {
+          if (event.percent > highestPercent) highestPercent = event.percent;
+        }
 
-      if (event.type !== "tool_use") continue;
+        if (event.type !== "tool_use") continue;
 
-      sawToolUse = true;
-      if (["write_file", "edit_file", "bash"].includes(event.name)) {
-        everWrote = true;
-      }
+        sawToolUse = true;
+        if (["write_file", "edit_file", "bash"].includes(event.name)) {
+          everWrote = true;
+        }
 
-      // Record the actual tool call with its real arguments for history
-      turnToolCalls.push({
-        id: event.id,
-        name: event.name,
-        arguments: JSON.stringify(event.input ?? {}),
-      });
-
-      const handler = getToolHandler({ name: event.name, toolHandlers });
-
-      const permission = evaluatePermission({
-        tool: event.name,
-        input: event.input,
-        workspacePath,
-        rules: permissionRules,
-      });
-
-      if (permission.action !== "allow") {
-        yield {
-          type: "permission_denied",
-          tool: event.name,
-          reason: permission.reason,
-        };
-
-        const denied = `Permission denied for tool "${event.name}": ${permission.reason}`;
-        yield {
-          type: "tool_result",
+        // Record the actual tool call with its real arguments for history
+        turnToolCalls.push({
           id: event.id,
-          output: denied,
-          isError: true,
-        };
-        turnToolResults.push(
-          createToolMessage({
-            toolUseId: event.id,
-            toolName: event.name,
-            output: denied,
-          }),
-        );
-        continue;
-      }
+          name: event.name,
+          arguments: JSON.stringify(event.input ?? {}),
+        });
 
-      if (!handler) {
-        if (mcpCallTool && isMcpTool(event.name)) {
-          const result = await mcpCallTool(event.name, event.input);
+        const handler = getToolHandler({ name: event.name, toolHandlers });
+
+        const permission = evaluatePermission({
+          tool: event.name,
+          input: event.input,
+          workspacePath,
+          rules: permissionRules,
+        });
+
+        if (permission.action !== "allow") {
+          yield {
+            type: "permission_denied",
+            tool: event.name,
+            reason: permission.reason,
+          };
+
+          const denied = `Permission denied for tool "${event.name}": ${permission.reason}`;
           yield {
             type: "tool_result",
             id: event.id,
-            output: result.output,
-            isError: result.isError,
+            output: denied,
+            isError: true,
           };
           turnToolResults.push(
             createToolMessage({
               toolUseId: event.id,
               toolName: event.name,
-              output: result.output,
+              output: denied,
             }),
           );
           continue;
         }
 
-        const notFound = `Tool not found: ${event.name}`;
+        if (!handler) {
+          if (mcpCallTool && isMcpTool(event.name)) {
+            const result = await mcpCallTool(event.name, event.input);
+            yield {
+              type: "tool_result",
+              id: event.id,
+              output: result.output,
+              isError: result.isError,
+            };
+            turnToolResults.push(
+              createToolMessage({
+                toolUseId: event.id,
+                toolName: event.name,
+                output: result.output,
+              }),
+            );
+            continue;
+          }
+
+          const notFound = `Tool not found: ${event.name}`;
+          yield {
+            type: "tool_result",
+            id: event.id,
+            output: notFound,
+            isError: true,
+          };
+          turnToolResults.push(
+            createToolMessage({
+              toolUseId: event.id,
+              toolName: event.name,
+              output: notFound,
+            }),
+          );
+          continue;
+        }
+
+        const result = await executeTool({
+          handler,
+          input: event.input,
+          context: { workspacePath, sessionId },
+        });
+
         yield {
           type: "tool_result",
           id: event.id,
-          output: notFound,
-          isError: true,
+          output: result.output,
+          isError: result.isError,
         };
         turnToolResults.push(
           createToolMessage({
             toolUseId: event.id,
             toolName: event.name,
-            output: notFound,
+            output: result.output,
           }),
         );
-        continue;
       }
-
-      const result = await executeTool({
-        handler,
-        input: event.input,
-        context: { workspacePath, sessionId },
-      });
-
-      yield {
-        type: "tool_result",
-        id: event.id,
-        output: result.output,
-        isError: result.isError,
-      };
-      turnToolResults.push(
-        createToolMessage({
-          toolUseId: event.id,
-          toolName: event.name,
-          output: result.output,
-        }),
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const category = classifyError(msg);
+      console.warn(
+        `[agent-loop] adapter.chat error — category: ${category}`,
+        msg,
       );
+      if (FATAL_ERROR_CATEGORIES.has(category)) {
+        throw err;
+      }
+      // retryable (timeout, rate_limit, network) and others: let outer loop retry
+      continue;
     }
 
     // Push messages in correct OpenAI order:
