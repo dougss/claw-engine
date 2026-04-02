@@ -1,11 +1,20 @@
 import { loadConfig } from "../../config.js";
 import { getDb } from "../../storage/db.js";
-import { getWorkItemById, updateWorkItemStatus } from "../../storage/repositories/work-items-repo.js";
-import { getTasksByWorkItemId, getTaskCheckpointData, updateTaskStatus } from "../../storage/repositories/tasks-repo.js";
-import { getTelemetryByTaskId } from "../../storage/repositories/telemetry-repo.js";
-import { createPostgresSessionStore } from "../../harness/session-store.js";
+import {
+  getWorkItemById,
+  updateWorkItemStatus,
+} from "../../storage/repositories/work-items-repo.js";
+import {
+  getTasksByWorkItemId,
+  getTaskCheckpointData,
+  updateTaskStatus,
+} from "../../storage/repositories/tasks-repo.js";
+import { createProductionSessionStore } from "../../core/session-manager.js";
 import { createQueryEnginePort } from "../../harness/query-engine-port.js";
-import { createQueryEngineConfig, TOOL_PROFILE } from "../../harness/query-engine-config.js";
+import {
+  createQueryEngineConfig,
+  TOOL_PROFILE,
+} from "../../harness/query-engine-config.js";
 import { createAlibabaAdapter } from "../../harness/model-adapters/alibaba-adapter.js";
 import { withRetry } from "../../harness/model-adapters/with-retry.js";
 import { loadProjectContext } from "../../harness/context-builder.js";
@@ -16,8 +25,6 @@ import { editFileTool } from "../../harness/tools/builtins/edit-file.js";
 import { bashTool } from "../../harness/tools/builtins/bash.js";
 import { globTool } from "../../harness/tools/builtins/glob-tool.js";
 import { grepTool } from "../../harness/tools/builtins/grep-tool.js";
-import { routeTask } from "../../core/router.js";
-import { classifyTask } from "../../core/classifier.js";
 import type { ToolHandler } from "../../harness/tools/tool-types.js";
 
 export function registerResumeCommand(program: import("commander").Command) {
@@ -33,25 +40,23 @@ export function registerResumeCommand(program: import("commander").Command) {
             process.env[config.database.password_env] ?? "claw_engine_local";
           return `postgresql://${config.database.user}:${pw}@${config.database.host}:${config.database.port}/${config.database.database}`;
         })();
-      
+
       try {
         const db = getDb({ connectionString: connStr });
-        
-        // Check if work item exists
+
         const workItem = await getWorkItemById(db, workItemId);
         if (!workItem) {
-          console.error(`Work item with ID ${workItemId} not found.`);
+          console.error(`Work item ${workItemId} not found.`);
           process.exit(1);
         }
-        
-        // Get associated tasks
+
         const tasks = await getTasksByWorkItemId(db, workItemId);
         if (tasks.length === 0) {
           console.error(`No tasks found for work item ${workItemId}.`);
           process.exit(1);
         }
-        
-        // Find a task that has checkpoint data to resume from
+
+        // Find first task with a saved checkpoint
         let taskToResume = null;
         for (const task of tasks) {
           const checkpointData = await getTaskCheckpointData(db, task.id);
@@ -60,109 +65,70 @@ export function registerResumeCommand(program: import("commander").Command) {
             break;
           }
         }
-        
+
         if (!taskToResume) {
-          console.error(`No checkpointed task found for work item ${workItemId}. Cannot resume.`);
+          console.error(
+            `No checkpointed task found for work item ${workItemId}.`,
+          );
           process.exit(1);
         }
-        
-        console.log(`Resuming work item ${workItemId} from task ${taskToResume.id}...`);
-        
-        // Update work item status to running
-        await updateWorkItemStatus(db, workItemId, 'running');
-        console.log(`Work item ${workItemId} status updated to running.`);
-        
-        // Update task status to running
-        await updateTaskStatus(db, taskToResume.id, 'running');
-        console.log(`Task ${taskToResume.id} status updated to running.`);
-        
-        // Create session store for PostgreSQL
-        const sessionStore = createPostgresSessionStore({
-          getTaskCheckpointData: (taskId: string) => getTaskCheckpointData(db, taskId),
-          setTaskCheckpointData: async (taskId: string, data: Record<string, unknown> | null) => {
-            // We'll handle setting checkpoint data later when we have the session running
-          },
-          listTasksWithCheckpoint: async () => {
-            // Return all tasks with checkpoint data for this work item
-            const allTasks = await getTasksByWorkItemId(db, workItemId);
-            const checkpointedTasks = [];
-            for (const task of allTasks) {
-              const checkpointData = await getTaskCheckpointData(db, task.id);
-              if (checkpointData) {
-                checkpointedTasks.push(task.id);
-              }
-            }
-            return checkpointedTasks;
-          }
-        });
-        
-        // Get project context for the task's repo
-        const repoPath = process.cwd(); // For now, assume we're in the right repo
+
+        console.log(
+          `Resuming work item ${workItemId} (task ${taskToResume.id})...`,
+        );
+
+        await updateWorkItemStatus(db, workItemId, "running");
+        await updateTaskStatus(db, taskToResume.id, "running");
+
+        // Use production session store (with real setTaskCheckpointData)
+        const sessionStore = await createProductionSessionStore(connStr);
+
+        // Recover workspacePath from the saved checkpoint config
+        const checkpointData = await getTaskCheckpointData(db, taskToResume.id);
+        const savedWorkspacePath = (
+          checkpointData?.config as Record<string, unknown> | null
+        )?.workspacePath as string | undefined;
+        const repoPath = savedWorkspacePath ?? process.cwd();
+
         const projectContext = await loadProjectContext(repoPath);
-        
-        // Prepare configuration for query engine
+
         const engineConfig = createQueryEngineConfig({
           maxTurns: 200,
-          maxTokens: 128000, // Qwen max context
+          maxTokens: 128_000,
           workspacePath: repoPath,
           sessionId: taskToResume.id,
           toolProfile: TOOL_PROFILE.full,
         });
-        
-        // Determine model to use based on task or default
-        let model = config.models.default;
-        if (taskToResume.model) {
-          model = taskToResume.model;
-        }
-        
-        // Route the task to determine the appropriate mode
-        let complexity: "simple" | "medium" | "complex" = taskToResume.complexity as "simple" | "medium" | "complex" || "medium";
-        
-        const route = routeTask(
-          {
-            complexity,
-            description: taskToResume.description,
-            fallbackChainPosition: 0,
-            claudeBudgetPercent: 0,
-          },
-          config,
-        );
-        
-        // Create the appropriate adapter based on routing
+
+        const model = taskToResume.model ?? config.models.default;
+
         const apiKeyEnv = config.providers.alibaba.api_key_env;
         const apiKey = process.env[apiKeyEnv];
         if (!apiKey) {
-          console.error(`Resuming requires ${apiKeyEnv} env var.`);
+          console.error(`Resume requires ${apiKeyEnv} env var.`);
           process.exit(1);
         }
-        
+
         const baseAdapter = createAlibabaAdapter({
           name: "qwen-resume",
-          model: model,
+          model,
           apiKey,
           baseUrl: config.providers.alibaba.base_url,
         });
-        
-        // Set up retry mechanism with fallback chain
-        let fallbackChainPosition = 0;
-        if (model) {
-          const fallbackChain = config.models.fallback_chain;
-          const position = fallbackChain.findIndex(
-            (tier) => tier.model === model,
-          );
-          if (position !== -1) {
-            fallbackChainPosition = position;
-          }
-        }
-        
+
+        const fallbackChain = config.models.fallback_chain;
+        const fallbackChainPosition = Math.max(
+          0,
+          fallbackChain.findIndex((t) => t.model === model),
+        );
+
         const adapter = withRetry(baseAdapter, {
           fallbackChainPosition,
           config,
           apiKey,
           baseUrl: config.providers.alibaba.base_url,
         });
-        
-        // Set up tools
+
         const builtins: ToolHandler[] = [
           readFileTool,
           writeFileTool,
@@ -179,23 +145,24 @@ export function registerResumeCommand(program: import("commander").Command) {
           description: t.description,
           inputSchema: t.inputSchema,
         }));
-        
-        // Create the query engine port
+
         const port = createQueryEnginePort({
           config: engineConfig,
           adapter,
-          systemPrompt: `You are resuming a coding task in the repository at ${repoPath}. Continue where you left off.`,
+          systemPrompt: [
+            `You are resuming a coding task in the repository at ${repoPath}.`,
+            "Continue exactly where you left off.",
+            ...(projectContext
+              ? ["", "## Project Context", projectContext]
+              : []),
+          ].join("\n"),
           tools: toolDefinitions,
           sessionStore,
           toolHandlers,
           permissionRules: DEFAULT_PERMISSION_RULES,
         });
-        
-        // Resume the session
-        const resumeStream = port.resume(taskToResume.id);
-        
-        // Stream events to console
-        for await (const event of resumeStream) {
+
+        for await (const event of port.resume(taskToResume.id)) {
           if (event.type === "text_delta") {
             process.stdout.write(event.text);
           } else if (event.type === "tool_use") {
@@ -213,37 +180,34 @@ export function registerResumeCommand(program: import("commander").Command) {
             );
           } else if (event.type === "session_end") {
             process.stderr.write("\n");
-            
-            // Update status based on end reason
-            let taskStatus = 'completed';
-            let workItemStatus = 'completed';
-            
-            if (event.reason === 'completed') {
-              taskStatus = 'completed';
-              workItemStatus = 'completed';
-            } else if (event.reason === 'checkpoint') {
-              taskStatus = 'paused';
-              workItemStatus = 'paused';
-            } else {
-              taskStatus = 'failed';
-              workItemStatus = 'failed';
-            }
-            
+
+            const isCheckpoint = event.reason === "checkpoint";
+            const isComplete = event.reason === "completed";
+            const taskStatus = isComplete
+              ? "completed"
+              : isCheckpoint
+                ? "paused"
+                : "failed";
+            const wiStatus = isComplete
+              ? "completed"
+              : isCheckpoint
+                ? "paused"
+                : "failed";
+
             await updateTaskStatus(db, taskToResume.id, taskStatus);
-            await updateWorkItemStatus(db, workItemId, workItemStatus);
-            
-            if (event.reason === 'completed') {
-              console.log("\n✅ done");
-            } else if (event.reason === 'checkpoint') {
-              console.log("\n📍 checkpoint saved");
-            } else {
-              console.log(`\n⚠️  ended: ${event.reason}`);
-            }
+            await updateWorkItemStatus(db, workItemId, wiStatus);
+
+            if (isComplete) console.log("\n✅ done");
+            else if (isCheckpoint) console.log("\n📍 checkpoint saved");
+            else console.log(`\n⚠️  ended: ${event.reason}`);
             break;
           }
         }
       } catch (error) {
-        console.error('Error resuming work item:', error instanceof Error ? error.message : String(error));
+        console.error(
+          "Error resuming work item:",
+          error instanceof Error ? error.message : String(error),
+        );
         process.exit(1);
       }
     });

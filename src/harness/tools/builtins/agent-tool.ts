@@ -116,7 +116,7 @@ export const spawnAgentTool: ToolHandler = {
         prompt,
         workspacePath,
         claudeBin,
-        ...(maxTurns !== undefined ? { allowedTools: [] } : {}),
+        maxTurns,
       })) {
         if (event.type === "text_delta") {
           output += event.text;

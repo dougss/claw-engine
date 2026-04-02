@@ -124,6 +124,7 @@ export interface ClaudePipeOptions {
   /** Hard timeout before killing claude -p. Default: 60 minutes. */
   timeoutMs?: number;
   claudeBin?: string;
+  maxTurns?: number;
 }
 
 /**
@@ -141,12 +142,14 @@ export async function* runClaudePipe(
     workspacePath,
     timeoutMs = 3_600_000, // 60 minutes
     claudeBin = "claude",
+    maxTurns,
   } = opts;
 
   const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
 
   if (systemPrompt) args.push("--system-prompt", systemPrompt);
   if (model) args.push("--model", model);
+  if (maxTurns !== undefined) args.push("--max-turns", String(maxTurns));
   if (allowedTools && allowedTools.length > 0) {
     args.push("--allowedTools", allowedTools.join(","));
   }
