@@ -186,6 +186,15 @@ export function registerRunCommand(program: import("commander").Command) {
           taskId = task.id;
           await updateWorkItemStatus(db, wi.id, "running");
           await updateTaskStatus(db, task.id, "running");
+          void insertTelemetryEvent(db, {
+            taskId: task.id,
+            eventType: "routing_decision",
+            payload: {
+              complexity,
+              mode,
+              reason: opts.delegate ? "forced" : route.reason,
+            },
+          }).catch(() => {});
         } catch {
           // DB tracking is best-effort — don't fail the run if DB is unavailable
           console.error(
@@ -222,13 +231,39 @@ export function registerRunCommand(program: import("commander").Command) {
                 const preview =
                   input.length > 60 ? input.slice(0, 57) + "..." : input;
                 process.stderr.write(`\n[tool] ${event.name}(${preview})\n`);
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: "tool_use",
+                    payload: { name: event.name, input: event.input },
+                  }).catch(() => {});
+                }
               } else if (event.type === "token_update") {
                 process.stderr.write(
                   `\r[tokens] ${event.used.toLocaleString()} / ${event.budget.toLocaleString()} (${event.percent}%)   `,
                 );
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: "token_update",
+                    payload: {
+                      used: event.used,
+                      budget: event.budget,
+                      percent: event.percent,
+                    },
+                  }).catch(() => {});
+                  void updateTaskTokens(db, taskId, event.used).catch(() => {});
+                }
               } else if (event.type === "session_end") {
                 endReason = event.reason;
                 process.stderr.write("\n");
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: "session_end",
+                    payload: { reason: event.reason },
+                  }).catch(() => {});
+                }
                 if (event.reason === "completed") {
                   console.log("\n✅ done");
                   autoCommit(repoPath, prompt, !!opts.noCommit);
