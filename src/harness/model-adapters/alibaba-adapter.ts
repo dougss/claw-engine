@@ -1,4 +1,4 @@
-import type { Message, ToolDefinition } from "../../types.js";
+import type { Message, ToolCallRecord, ToolDefinition } from "../../types.js";
 import type { HarnessEvent } from "../events.js";
 import type { ModelAdapter } from "./adapter-types.js";
 
@@ -39,8 +39,9 @@ function toOAIMessages(messages: Message[]): OAIMessage[] {
   const result: OAIMessage[] = [];
   for (const msg of messages) {
     if (msg.role === "tool") {
-      // OpenAI requires an assistant tool_calls message before each tool result.
-      // If it's missing (our loop doesn't store it), insert a synthetic one.
+      // OpenAI requires an assistant tool_calls message immediately before each
+      // tool result. The agent loop now stores assistant messages with real
+      // toolCalls. Only fall back to a synthetic placeholder if missing.
       const prev = result[result.length - 1];
       const prevHasCall =
         prev?.role === "assistant" &&
@@ -55,11 +56,7 @@ function toOAIMessages(messages: Message[]): OAIMessage[] {
             {
               id: msg.toolUseId ?? "unknown",
               type: "function",
-              function: {
-                name: msg.toolName ?? "unknown",
-                // Arguments not stored in history — empty object is valid placeholder
-                arguments: "{}",
-              },
+              function: { name: msg.toolName ?? "unknown", arguments: "{}" },
             },
           ],
         });
@@ -68,6 +65,21 @@ function toOAIMessages(messages: Message[]): OAIMessage[] {
         role: "tool",
         content: msg.content,
         tool_call_id: msg.toolUseId ?? "unknown",
+      });
+    } else if (
+      msg.role === "assistant" &&
+      msg.toolCalls &&
+      msg.toolCalls.length > 0
+    ) {
+      // Assistant message with tool calls — use the real recorded arguments
+      result.push({
+        role: "assistant",
+        content: msg.content || null,
+        tool_calls: msg.toolCalls.map((tc: ToolCallRecord) => ({
+          id: tc.id,
+          type: "function",
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
       });
     } else {
       result.push({

@@ -31,11 +31,20 @@ export const WORK_ITEM_STATUS = {
 export type WorkItemStatus =
   (typeof WORK_ITEM_STATUS)[keyof typeof WORK_ITEM_STATUS];
 
+export interface ToolCallRecord {
+  id: string;
+  name: string;
+  /** Serialized JSON arguments string (mirrors OpenAI wire format) */
+  arguments: string;
+}
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   toolUseId?: string;
   toolName?: string;
+  /** For assistant messages: the tool calls made in this turn */
+  toolCalls?: ToolCallRecord[];
 }
 
 export interface ToolDefinition {

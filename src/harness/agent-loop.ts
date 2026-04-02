@@ -1,4 +1,9 @@
-import type { Message, ToolDefinition, ToolResult } from "../types.js";
+import type {
+  Message,
+  ToolCallRecord,
+  ToolDefinition,
+  ToolResult,
+} from "../types.js";
 import type { HarnessEvent } from "./events.js";
 import type { ModelAdapter } from "./model-adapters/adapter-types.js";
 import { getTool, isMcpTool } from "./tools/tool-registry.js";
@@ -121,6 +126,11 @@ export async function* runAgentLoop({
     let assistantText = "";
     let highestPercent = 0;
 
+    // Collect tool calls and their results separately so we can push them to
+    // messages in the correct OpenAI order: [assistant (text+toolCalls), tool, tool, ...]
+    const turnToolCalls: ToolCallRecord[] = [];
+    const turnToolResults: Message[] = [];
+
     for await (const event of adapter.chat(messages, tools)) {
       yield event;
 
@@ -139,6 +149,13 @@ export async function* runAgentLoop({
         everWrote = true;
       }
 
+      // Record the actual tool call with its real arguments for history
+      turnToolCalls.push({
+        id: event.id,
+        name: event.name,
+        arguments: JSON.stringify(event.input ?? {}),
+      });
+
       const handler = getToolHandler({ name: event.name, toolHandlers });
 
       const permission = evaluatePermission({
@@ -155,19 +172,18 @@ export async function* runAgentLoop({
           reason: permission.reason,
         };
 
-        const toolResultEvent: HarnessEvent = {
+        const denied = `Permission denied for tool "${event.name}": ${permission.reason}`;
+        yield {
           type: "tool_result",
           id: event.id,
-          output: `Permission denied for tool "${event.name}": ${permission.reason}`,
+          output: denied,
           isError: true,
         };
-
-        yield toolResultEvent;
-        messages.push(
+        turnToolResults.push(
           createToolMessage({
             toolUseId: event.id,
             toolName: event.name,
-            output: toolResultEvent.output,
+            output: denied,
           }),
         );
         continue;
@@ -176,36 +192,34 @@ export async function* runAgentLoop({
       if (!handler) {
         if (mcpCallTool && isMcpTool(event.name)) {
           const result = await mcpCallTool(event.name, event.input);
-          const toolResultEvent: HarnessEvent = {
+          yield {
             type: "tool_result",
             id: event.id,
             output: result.output,
             isError: result.isError,
           };
-          yield toolResultEvent;
-          messages.push(
+          turnToolResults.push(
             createToolMessage({
               toolUseId: event.id,
               toolName: event.name,
-              output: toolResultEvent.output,
+              output: result.output,
             }),
           );
           continue;
         }
 
-        const toolResultEvent: HarnessEvent = {
+        const notFound = `Tool not found: ${event.name}`;
+        yield {
           type: "tool_result",
           id: event.id,
-          output: `Tool not found: ${event.name}`,
+          output: notFound,
           isError: true,
         };
-
-        yield toolResultEvent;
-        messages.push(
+        turnToolResults.push(
           createToolMessage({
             toolUseId: event.id,
             toolName: event.name,
-            output: toolResultEvent.output,
+            output: notFound,
           }),
         );
         continue;
@@ -217,15 +231,13 @@ export async function* runAgentLoop({
         context: { workspacePath, sessionId },
       });
 
-      const toolResultEvent: HarnessEvent = {
+      yield {
         type: "tool_result",
         id: event.id,
         output: result.output,
         isError: result.isError,
       };
-
-      yield toolResultEvent;
-      messages.push(
+      turnToolResults.push(
         createToolMessage({
           toolUseId: event.id,
           toolName: event.name,
@@ -234,8 +246,18 @@ export async function* runAgentLoop({
       );
     }
 
-    if (assistantText) {
-      messages.push(createAssistantMessage(assistantText));
+    // Push messages in correct OpenAI order:
+    // 1. assistant message with text AND tool_calls (with real arguments)
+    // 2. one tool result message per call
+    if (assistantText || turnToolCalls.length > 0) {
+      messages.push({
+        role: "assistant",
+        content: assistantText,
+        ...(turnToolCalls.length > 0 ? { toolCalls: turnToolCalls } : {}),
+      });
+    }
+    for (const toolMsg of turnToolResults) {
+      messages.push(toolMsg);
     }
 
     // Check checkpoint threshold before deciding to continue
