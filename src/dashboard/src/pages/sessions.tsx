@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { fetchSessions, fetchAllTasks, type TaskFull } from "../lib/api";
 import { createSseClient } from "../lib/sse";
 import {
@@ -10,7 +11,13 @@ import {
 
 // ── Session card ──────────────────────────────────────────────────────────────
 
-function SessionCard({ session }: { session: TaskFull }) {
+function SessionCard({
+  session,
+  onViewLogs,
+}: {
+  session: TaskFull;
+  onViewLogs: (id: string) => void;
+}) {
   const tokensK = (Number(session.tokensUsed) / 1000).toFixed(1);
   const cost = Number(session.costUsd).toFixed(4);
 
@@ -85,6 +92,23 @@ function SessionCard({ session }: { session: TaskFull }) {
           >
             ${cost}
           </span>
+          <button
+            onClick={() => onViewLogs(session.id)}
+            className="ml-auto flex items-center gap-1 font-mono text-[10px] text-text-dim hover:text-accent transition-colors duration-150 cursor-pointer"
+          >
+            logs
+            <svg
+              width="9"
+              height="9"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -116,6 +140,7 @@ function LiveCounter({ count }: { count: number }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export function SessionsPage() {
+  const navigate = useNavigate();
   const [activeSessions, setActiveSessions] = useState<TaskFull[]>([]);
   const [allTasks, setAllTasks] = useState<TaskFull[]>([]);
 
@@ -171,7 +196,11 @@ export function SessionsPage() {
             </p>
             <div className="space-y-2.5">
               {activeSessions.map((session) => (
-                <SessionCard key={session.id} session={session} />
+                <SessionCard
+                  key={session.id}
+                  session={session}
+                  onViewLogs={(id) => navigate(`/logs?task=${id}`)}
+                />
               ))}
             </div>
           </div>
@@ -185,7 +214,11 @@ export function SessionsPage() {
             </p>
             <div className="space-y-2.5">
               {inactiveTasks.map((task) => (
-                <SessionCard key={task.id} session={task} />
+                <SessionCard
+                  key={task.id}
+                  session={task}
+                  onViewLogs={(id) => navigate(`/logs?task=${id}`)}
+                />
               ))}
             </div>
           </div>

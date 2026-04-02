@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { fetchLogs, type LogEntry } from "../lib/api";
 import { PageHeader } from "../components/ui";
 
@@ -155,8 +156,9 @@ function FilterBar({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export function LogsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [taskFilter, setTaskFilter] = useState("");
+  const [taskFilter, setTaskFilter] = useState(searchParams.get("task") ?? "");
   const [paused, setPaused] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -187,7 +189,10 @@ export function LogsPage() {
 
       <FilterBar
         taskFilter={taskFilter}
-        onFilterChange={setTaskFilter}
+        onFilterChange={(v) => {
+          setTaskFilter(v);
+          setSearchParams(v ? { task: v } : {});
+        }}
         paused={paused}
         onTogglePause={() => setPaused((p) => !p)}
         count={logs.length}
