@@ -14,6 +14,11 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { exec } from "node:child_process";
 import { runValidation } from "./validation-runner.js";
+import {
+  registerSession,
+  unregisterSession,
+} from "./session-registry.js";
+import type { SessionHealth } from "./health-monitor.js";
 
 /** Checkpoint data from a previous session used to resume work. */
 export interface ResumeCheckpoint {

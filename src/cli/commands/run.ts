@@ -33,6 +33,8 @@ import { bashTool } from "../../harness/tools/builtins/bash.js";
 import { globTool } from "../../harness/tools/builtins/glob-tool.js";
 import { grepTool } from "../../harness/tools/builtins/grep-tool.js";
 import { execSync } from "node:child_process";
+import { connectNexusMcp } from "../../integrations/nexus/client.js";
+import type { ToolDefinition } from "../../types.js";
 
 export function registerRunCommand(program: import("commander").Command) {
   function autoCommit(
@@ -361,6 +363,33 @@ export function registerRunCommand(program: import("commander").Command) {
           const sessionStore = await createProductionSessionStore(connStr);
 
           const sessionId = taskId ?? `session-${Date.now()}`;
+          
+          // Try to connect to Nexus MCP server
+          let nexusHandle = null;
+          let nexusWorkflowSection = "";
+          try {
+            nexusHandle = await connectNexusMcp({});
+            if (nexusHandle) {
+              console.log("[nexus] Connected to MCP server");
+              
+              // Call the 'nexus' tool with the task prompt to get workflow
+              const nexusResult = await nexusHandle.callTool("nexus", { 
+                intent: prompt 
+              });
+              
+              if (!nexusResult.isError) {
+                nexusWorkflowSection = `## Nexus Workflow\n${nexusResult.output}`;
+                console.log("[nexus] Retrieved workflow for task");
+              } else {
+                console.warn("[nexus] Failed to retrieve workflow:", nexusResult.output);
+              }
+            } else {
+              console.log("[nexus] MCP server not available, continuing without Nexus integration");
+            }
+          } catch (error) {
+            console.warn("[nexus] Error connecting to MCP server:", error instanceof Error ? error.message : String(error));
+          }
+
           const engineConfig = createQueryEngineConfig({
             maxTurns: opts.maxTurns ?? 200,
             maxTokens: adapter.maxContext,
@@ -382,16 +411,30 @@ export function registerRunCommand(program: import("commander").Command) {
             "5. If a command fails, read the error, fix it, re-run. Never give up silently.",
             "6. Do NOT return a text-only response until verification succeeds.",
             "7. Prefer edit_file for modifying existing files. Use write_file only for NEW files, and keep new files under 100 lines — split larger files.",
+            "",
+            "BEFORE WRITING ANY CODE, call nexus with your task intent to get the workflow. Follow the workflow phases in order.",
             ...(projectContext
               ? ["", "## Project Context", projectContext]
               : []),
+            ...(nexusWorkflowSection ? ["", nexusWorkflowSection] : []),
           ].join("\n");
+
+          // Combine built-in tools with Nexus MCP tools if available
+          let allToolDefinitions = [...builtins.map((t) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema,
+          }))];
+
+          if (nexusHandle) {
+            allToolDefinitions = [...allToolDefinitions, ...nexusHandle.tools];
+          }
 
           const port = createQueryEnginePort({
             config: engineConfig,
             adapter,
             systemPrompt,
-            tools: toolDefinitions,
+            tools: allToolDefinitions,
             sessionStore,
             toolHandlers,
             permissionRules: DEFAULT_PERMISSION_RULES,
@@ -540,6 +583,16 @@ export function registerRunCommand(program: import("commander").Command) {
             endReason = "failed";
             console.error("\n❌", (err as Error).message);
           } finally {
+            // Disconnect Nexus MCP if connected
+            if (nexusHandle) {
+              try {
+                await nexusHandle.disconnect();
+                console.log("[nexus] Disconnected from MCP server");
+              } catch (disconnectErr) {
+                console.warn("[nexus] Error disconnecting from MCP server:", disconnectErr);
+              }
+            }
+            
             if (tempDir) {
               rmSync(tempDir, { recursive: true, force: true });
               tempDir = null;

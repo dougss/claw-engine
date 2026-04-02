@@ -29,7 +29,17 @@ export type HarnessEvent =
       error: string;
     }
   | { type: "model_fallback"; from: string; to: string; reason: string }
-  | { type: "session_resume"; sessionId: string; resumeCount: number };
+  | { type: "session_resume"; sessionId: string; resumeCount: number }
+  | {
+      type: "validation_result";
+      passed: boolean;
+      steps: Array<{
+        name: string;
+        passed: boolean;
+        output: string;
+        durationMs: number;
+      }>;
+    };
 
 export function createTextDelta(text: string): HarnessEvent {
   return { type: "text_delta", text };
