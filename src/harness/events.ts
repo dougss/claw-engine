@@ -39,7 +39,16 @@ export type HarnessEvent =
         output: string;
         durationMs: number;
       }>;
+    }
+  | { type: "phase_start"; phase: PipelinePhase; attempt: number }
+  | {
+      type: "phase_end";
+      phase: PipelinePhase;
+      success: boolean;
+      durationMs: number;
     };
+
+export type PipelinePhase = "plan" | "execute" | "validate" | "review" | "pr";
 
 export function createTextDelta(text: string): HarnessEvent {
   return { type: "text_delta", text };

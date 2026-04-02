@@ -62,6 +62,11 @@ export function registerRunCommand(program: import("commander").Command) {
     .option("--no-resume", "Disable auto-resume on checkpoint")
     .option("--resume <sessionId>", "Resume a previous session by ID")
     .option("--no-commit", "Skip automatic git commit of changes")
+    .option(
+      "--pipeline",
+      "Use 5-phase pipeline (plan → execute → validate → review → pr)",
+    )
+    .option("--pr", "Open a PR after pipeline completes (requires --pipeline)")
     .action(
       async (
         repo: string,
@@ -74,6 +79,8 @@ export function registerRunCommand(program: import("commander").Command) {
           resume?: boolean | string;
           noResume?: boolean;
           noCommit?: boolean;
+          pipeline?: boolean;
+          pr?: boolean;
         },
       ) => {
         const GITHUB_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
@@ -197,6 +204,63 @@ export function registerRunCommand(program: import("commander").Command) {
             /* best-effort */
           }
         };
+
+        if (opts.pipeline) {
+          const { runPipeline } = await import("../../core/pipeline.js");
+
+          const result = await runPipeline({
+            repoPath,
+            prompt,
+            config,
+            claudeBin: config.providers.anthropic.binary,
+            opencodeBin: config.providers.opencode.binary,
+            opencodeModel:
+              opts.model ??
+              config.providers.opencode.default_model ??
+              "dashscope/qwen3-coder-plus",
+            maxRetries: config.validation.max_retries,
+            openPr: !!opts.pr,
+            onEvent: (event) => {
+              if (event.type === "text_delta") {
+                process.stdout.write(event.text);
+              } else if (event.type === "phase_start") {
+                console.log(
+                  `\n[pipeline] ▶ ${event.phase.toUpperCase()} (attempt ${event.attempt})`,
+                );
+              } else if (event.type === "phase_end") {
+                const icon = event.success ? "✅" : "❌";
+                console.log(
+                  `[pipeline] ${icon} ${event.phase.toUpperCase()} (${event.durationMs}ms)`,
+                );
+              } else if (event.type === "validation_result") {
+                for (const step of event.steps) {
+                  const icon = step.passed ? "✓" : "✗";
+                  console.log(`  ${icon} ${step.name} (${step.durationMs}ms)`);
+                }
+              }
+              if (db && taskId) {
+                void insertTelemetryEvent(db, {
+                  taskId,
+                  eventType: event.type,
+                  payload: event,
+                }).catch(() => {});
+              }
+            },
+          });
+
+          if (result.executeSuccess) {
+            autoCommit(repoPath, prompt, !!opts.noCommit);
+            console.log("\n✅ pipeline complete");
+            if (result.prUrl) console.log(`PR: ${result.prUrl}`);
+            await finalizeDb("completed", "completed");
+          } else {
+            console.log(
+              "\n❌ pipeline failed (validation did not pass after retries)",
+            );
+            await finalizeDb("failed", "failed");
+          }
+          return;
+        }
 
         if (mode === "delegate") {
           const delegateProvider = effectiveRoute.provider;
