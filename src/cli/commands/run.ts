@@ -233,7 +233,7 @@ export function registerRunCommand(program: import("commander").Command) {
                 config.providers.opencode.default_model ??
                 "dashscope/qwen3-coder-plus",
               maxRetries: config.validation.max_retries,
-              maxReviewRetries: 1,
+              maxReviewRetries: 2,
               openPr: !!opts.pr,
               githubAppId,
               githubInstallationId,

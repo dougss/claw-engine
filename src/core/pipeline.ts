@@ -53,7 +53,7 @@ function gitCommitAndPush(repoPath: string, prompt: string): string {
   const opts = { cwd: repoPath, encoding: "utf-8" as const };
 
   const status = execSync("git status --porcelain", opts).trim();
-  if (!status) return execSync("git rev-parse --abbrev-ref HEAD", opts).trim();
+  if (!status) throw new Error('nothing to commit — working tree is clean');
 
   const currentBranch = execSync(
     "git rev-parse --abbrev-ref HEAD",
@@ -389,7 +389,6 @@ function parseReviewVerdict(review: string): 'APPROVE' | 'REQUEST_CHANGES' {
 }
 
 function getDefaultBranch(repoPath: string): string {
-  const { execSync } = require('node:child_process');
   try {
     const ref = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
       cwd: repoPath, encoding: 'utf-8'
@@ -522,7 +521,7 @@ export async function runPipeline(
   let prUrl: string | null = null;
   let reviewPassed = false;
   let reviewAttempt = 0;
-  let executeAttemptOffset = maxRetries + 1; // continue numbering from where validate left off
+  const executeAttemptOffset = maxRetries + 1; // continue numbering from where validate left off
 
   while (reviewAttempt <= maxReviewRetries) {
     reviewAttempt++;
@@ -576,6 +575,10 @@ export async function runPipeline(
     try {
       prBranch = gitCommitAndPush(repoPath, prompt);
     } catch (err: any) {
+      if (err.message.includes('nothing to commit')) {
+        console.log('[pipeline] nothing to commit, skipping PR');
+        return { plan, executeSuccess: true, validation, review, prUrl: null, reviewPassed };
+      }
       throw new Error(`Failed to commit/push for PR: ${err.message}`);
     }
   }
