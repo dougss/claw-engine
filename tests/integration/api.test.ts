@@ -71,3 +71,14 @@ describe("API — logs", () => {
     expect(Array.isArray(body.entries)).toBe(true);
   });
 });
+
+describe("API — health", () => {
+  it("GET /api/health returns health status", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/health" });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as { status: string; uptime: number };
+    expect(body.status).toBe('ok');
+    expect(typeof body.uptime).toBe('number');
+    expect(body.uptime).toBeGreaterThan(0);
+  });
+});

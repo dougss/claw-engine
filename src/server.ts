@@ -44,6 +44,14 @@ export async function createServer(configPath?: string) {
       registerLogsRoutes(api, db);
       registerSessionRoutes(api, db);
 
+      // Health check endpoint
+      api.get("/health", async (_request, reply) => {
+        return reply.send({ 
+          status: 'ok', 
+          uptime: process.uptime() 
+        });
+      });
+
       // SSE endpoint — each connection gets its own subscriber redis instance
       api.get("/events", async (request, reply) => {
         const lastEventId = (request.headers["last-event-id"] as string) ?? "";
