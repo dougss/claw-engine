@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { fetchSessions, type Task } from "../lib/api";
+import { fetchSessions, fetchAllTasks, type TaskFull } from "../lib/api";
 import { createSseClient } from "../lib/sse";
 import {
   StatusBadge,
@@ -10,7 +10,7 @@ import {
 
 // ── Session card ──────────────────────────────────────────────────────────────
 
-function SessionCard({ session }: { session: Task }) {
+function SessionCard({ session }: { session: TaskFull }) {
   const tokensK = (Number(session.tokensUsed) / 1000).toFixed(1);
   const cost = Number(session.costUsd).toFixed(4);
 
@@ -116,10 +116,16 @@ function LiveCounter({ count }: { count: number }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export function SessionsPage() {
-  const [sessions, setSessions] = useState<Task[]>([]);
+  const [activeSessions, setActiveSessions] = useState<TaskFull[]>([]);
+  const [allTasks, setAllTasks] = useState<TaskFull[]>([]);
+
+  const reload = () => {
+    fetchSessions().then(setActiveSessions).catch(console.error);
+    fetchAllTasks().then(setAllTasks).catch(console.error);
+  };
 
   useEffect(() => {
-    fetchSessions().then(setSessions).catch(console.error);
+    reload();
 
     const cleanup = createSseClient((event) => {
       if (
@@ -127,23 +133,63 @@ export function SessionsPage() {
         event.type === "session_end" ||
         event.type === "token_update"
       ) {
-        fetchSessions().then(setSessions).catch(console.error);
+        reload();
       }
     });
 
-    return cleanup;
+    // Refresh all tasks every 10s
+    const interval = setInterval(
+      () => fetchAllTasks().then(setAllTasks).catch(console.error),
+      10000,
+    );
+
+    return () => {
+      cleanup();
+      clearInterval(interval);
+    };
   }, []);
+
+  // Show active sessions at top, then recent completed/failed below
+  const inactiveTasks = allTasks.filter(
+    (t) => !activeSessions.find((s) => s.id === t.id),
+  );
 
   return (
     <div className="flex flex-col h-full animate-fade-in">
       <PageHeader
-        title="Active Sessions"
-        description="Real-time agent execution monitor"
-        actions={<LiveCounter count={sessions.length} />}
+        title="Sessions"
+        description="Agent task history"
+        actions={<LiveCounter count={activeSessions.length} />}
       />
 
-      <div className="flex-1 overflow-y-auto p-6">
-        {sessions.length === 0 ? (
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Active sessions section */}
+        {activeSessions.length > 0 && (
+          <div>
+            <p className="text-[10px] font-mono text-text-dim uppercase tracking-widest mb-3">
+              Active
+            </p>
+            <div className="space-y-2.5">
+              {activeSessions.map((session) => (
+                <SessionCard key={session.id} session={session} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* History section */}
+        {inactiveTasks.length > 0 ? (
+          <div>
+            <p className="text-[10px] font-mono text-text-dim uppercase tracking-widest mb-3">
+              Recent
+            </p>
+            <div className="space-y-2.5">
+              {inactiveTasks.map((task) => (
+                <SessionCard key={task.id} session={task} />
+              ))}
+            </div>
+          </div>
+        ) : activeSessions.length === 0 ? (
           <EmptyState
             icon={
               <svg
@@ -158,16 +204,10 @@ export function SessionsPage() {
                 <polyline points="8 21 12 17 16 21" />
               </svg>
             }
-            title="No active sessions"
-            description="Sessions will appear here when tasks are running"
+            title="No sessions yet"
+            description='Run a task with: npm run claw -- run &lt;repo&gt; "prompt"'
           />
-        ) : (
-          <div className="space-y-2.5">
-            {sessions.map((session) => (
-              <SessionCard key={session.id} session={session} />
-            ))}
-          </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

@@ -31,9 +31,9 @@ function getEventColor(eventType: string): string {
 function LogRow({ entry }: { entry: LogEntry }) {
   const color = getEventColor(entry.eventType ?? "");
   const payload =
-    typeof entry.payload === "string"
-      ? entry.payload
-      : JSON.stringify(entry.payload);
+    typeof entry.data === "string"
+      ? entry.data
+      : JSON.stringify(entry.data ?? {});
 
   return (
     <div className="flex gap-3 items-baseline py-0.5 px-3 hover:bg-surface-2/40 transition-colors duration-100 animate-log-in group">

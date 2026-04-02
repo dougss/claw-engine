@@ -12,7 +12,7 @@ import {
   fetchWorkItems,
   fetchWorkItem,
   type WorkItem,
-  type Task,
+  type TaskFull,
 } from "../lib/api";
 import { PageHeader, EmptyState } from "../components/ui";
 
@@ -72,7 +72,7 @@ const FALLBACK_GLOW = {
 
 // ── DAG node ──────────────────────────────────────────────────────────────────
 
-function buildNodes(tasks: Task[]): Node[] {
+function buildNodes(tasks: TaskFull[]): Node[] {
   return tasks.map((task, i) => {
     const col = i % 3;
     const row = Math.floor(i / 3);
@@ -157,7 +157,24 @@ function WorkItemSelector({
 
 // ── Legend ────────────────────────────────────────────────────────────────────
 
-function Legend({ tasks }: { tasks: Task[] }) {
+function buildEdges(tasks: TaskFull[]): Edge[] {
+  const edges: Edge[] = [];
+  for (const task of tasks) {
+    if (!task.dependsOn) continue;
+    for (const depId of task.dependsOn) {
+      edges.push({
+        id: `${depId}->${task.id}`,
+        source: depId,
+        target: task.id,
+        style: { stroke: "rgba(0,212,255,0.3)", strokeWidth: 1.5 },
+        animated: task.status === "running",
+      });
+    }
+  }
+  return edges;
+}
+
+function Legend({ tasks }: { tasks: TaskFull[] }) {
   const statusCounts = tasks.reduce<Record<string, number>>((acc, t) => {
     acc[t.status] = (acc[t.status] ?? 0) + 1;
     return acc;
@@ -207,7 +224,7 @@ function Legend({ tasks }: { tasks: Task[] }) {
 export function DagPage() {
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<TaskFull[]>([]);
 
   const loadWorkItems = useCallback(() => {
     fetchWorkItems().then(setWorkItems).catch(console.error);
@@ -222,12 +239,18 @@ export function DagPage() {
   useEffect(() => {
     if (!selected) return;
     fetchWorkItem(selected)
-      .then((wi) => setTasks(wi.tasks))
+      .then((wi) => setTasks((wi.tasks ?? []) as TaskFull[]))
       .catch(console.error);
+    const interval = setInterval(() => {
+      fetchWorkItem(selected)
+        .then((wi) => setTasks((wi.tasks ?? []) as TaskFull[]))
+        .catch(console.error);
+    }, 4000);
+    return () => clearInterval(interval);
   }, [selected]);
 
   const nodes: Node[] = buildNodes(tasks);
-  const edges: Edge[] = [];
+  const edges: Edge[] = buildEdges(tasks);
 
   return (
     <div className="flex flex-col h-full animate-fade-in">

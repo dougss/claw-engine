@@ -57,23 +57,36 @@ export async function fetchMetrics(): Promise<Metrics> {
   return res.json() as Promise<Metrics>;
 }
 
-export async function fetchSessions(): Promise<Task[]> {
+export interface TaskFull extends Task {
+  dagNodeId: string;
+  repo: string;
+  dependsOn: string[] | null;
+  workItemId: string;
+}
+
+export async function fetchSessions(): Promise<TaskFull[]> {
   const res = await fetch(`${BASE}/sessions`);
-  const data = (await res.json()) as { sessions: Task[] };
+  const data = (await res.json()) as { sessions: TaskFull[] };
   return data.sessions;
+}
+
+export async function fetchAllTasks(limit = 50): Promise<TaskFull[]> {
+  const res = await fetch(`${BASE}/tasks?limit=${limit}`);
+  const data = (await res.json()) as { tasks: TaskFull[] };
+  return data.tasks;
 }
 
 export interface LogEntry {
   id: string;
   taskId: string | null;
   eventType: string | null;
-  payload: unknown;
+  data: unknown;
   createdAt: string;
 }
 
 export async function fetchLogs(taskId?: string): Promise<LogEntry[]> {
   const url = taskId ? `${BASE}/logs?task_id=${taskId}` : `${BASE}/logs`;
   const res = await fetch(url);
-  const data = (await res.json()) as { entries: LogEntry[] };
-  return data.entries;
+  const json = (await res.json()) as { entries: LogEntry[] };
+  return json.entries;
 }
