@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   ReactFlow,
   Background,
   Controls,
+  BackgroundVariant,
   type Node,
   type Edge,
 } from "@xyflow/react";
@@ -13,18 +14,114 @@ import {
   type WorkItem,
   type Task,
 } from "../lib/api";
+import { PageHeader, EmptyState } from "../components/ui";
 
-const STATUS_COLOR: Record<string, string> = {
-  completed: "#22c55e",
-  running: "#3b82f6",
-  failed: "#ef4444",
-  pending: "#6b7280",
-  validating: "#8b5cf6",
+// ── Status color map ──────────────────────────────────────────────────────────
+
+const STATUS_GLOW: Record<
+  string,
+  { border: string; shadow: string; accent: string }
+> = {
+  completed: {
+    border: "rgba(57,255,140,0.5)",
+    shadow: "rgba(57,255,140,0.15)",
+    accent: "#39ff8c",
+  },
+  running: {
+    border: "rgba(0,212,255,0.5)",
+    shadow: "rgba(0,212,255,0.15)",
+    accent: "#00d4ff",
+  },
+  failed: {
+    border: "rgba(255,77,109,0.5)",
+    shadow: "rgba(255,77,109,0.15)",
+    accent: "#ff4d6d",
+  },
+  pending: {
+    border: "rgba(245,158,11,0.4)",
+    shadow: "rgba(245,158,11,0.08)",
+    accent: "#f59e0b",
+  },
+  validating: {
+    border: "rgba(129,140,248,0.4)",
+    shadow: "rgba(129,140,248,0.1)",
+    accent: "#818cf8",
+  },
+  provisioning: {
+    border: "rgba(167,139,250,0.4)",
+    shadow: "rgba(167,139,250,0.1)",
+    accent: "#a78bfa",
+  },
+  checkpointing: {
+    border: "rgba(251,146,60,0.4)",
+    shadow: "rgba(251,146,60,0.08)",
+    accent: "#fb923c",
+  },
+  starting: {
+    border: "rgba(251,191,36,0.4)",
+    shadow: "rgba(251,191,36,0.08)",
+    accent: "#fbbf24",
+  },
 };
 
-// ── Page header ───────────────────────────────────────────────────────────────
+const FALLBACK_GLOW = {
+  border: "rgba(46,74,106,0.6)",
+  shadow: "rgba(0,0,0,0.1)",
+  accent: "#5c7a9e",
+};
 
-function PageHeader({
+// ── DAG node ──────────────────────────────────────────────────────────────────
+
+function buildNodes(tasks: Task[]): Node[] {
+  return tasks.map((task, i) => {
+    const col = i % 3;
+    const row = Math.floor(i / 3);
+    const cfg = STATUS_GLOW[task.status] ?? FALLBACK_GLOW;
+    return {
+      id: task.id,
+      position: { x: 60 + col * 280, y: 60 + row * 150 },
+      data: {
+        label: (
+          <div className="space-y-2">
+            <div
+              className="text-xs font-medium leading-snug"
+              style={{ color: "#e8f0fe", fontFamily: "Inter, sans-serif" }}
+            >
+              {task.description.length > 60
+                ? task.description.slice(0, 57) + "…"
+                : task.description}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ backgroundColor: cfg.accent }}
+              />
+              <span
+                className="text-[10px] font-mono uppercase tracking-wider"
+                style={{ color: cfg.accent }}
+              >
+                {task.status}
+              </span>
+            </div>
+          </div>
+        ),
+      },
+      style: {
+        background: "linear-gradient(135deg, #0a1628, #0f1f35)",
+        border: `1px solid ${cfg.border}`,
+        borderRadius: 12,
+        color: "#e8f0fe",
+        padding: "12px 16px",
+        minWidth: 210,
+        boxShadow: `0 0 0 1px ${cfg.border}22, 0 4px 20px ${cfg.shadow}, inset 0 1px 0 rgba(255,255,255,0.04)`,
+      },
+    };
+  });
+}
+
+// ── Work item selector ────────────────────────────────────────────────────────
+
+function WorkItemSelector({
   workItems,
   selected,
   onSelect,
@@ -34,61 +131,73 @@ function PageHeader({
   onSelect: (id: string | null) => void;
 }) {
   return (
-    <div className="flex items-center justify-between px-6 py-4 border-b border-border-2 bg-surface/50">
-      <div>
-        <h1 className="text-sm font-semibold text-text-primary">DAG View</h1>
-        <p className="text-xs text-text-muted mt-0.5">Task dependency graph</p>
-      </div>
-      <div className="flex items-center gap-2">
-        <label htmlFor="wi-select" className="text-xs text-text-dim">
-          Work item
-        </label>
-        <select
-          id="wi-select"
-          className="bg-surface-2 border border-border-3 text-sm text-text-primary px-3 py-1.5 rounded-lg cursor-pointer focus:outline-none focus:border-accent/40 transition-colors duration-150"
-          value={selected ?? ""}
-          onChange={(e) => onSelect(e.target.value || null)}
-        >
-          <option value="">— select —</option>
-          {workItems.map((wi) => (
-            <option key={wi.id} value={wi.id}>
-              {wi.title} · {wi.status}
-            </option>
-          ))}
-        </select>
-      </div>
+    <div className="flex items-center gap-2">
+      <label
+        htmlFor="wi-select"
+        className="text-[10px] font-mono text-text-muted uppercase tracking-widest shrink-0"
+      >
+        Work Item
+      </label>
+      <select
+        id="wi-select"
+        className="bg-surface-2 border border-border-3 text-xs text-text-secondary px-3 py-1.5 rounded-lg cursor-pointer focus:outline-none focus:border-accent/40 transition-colors duration-150 font-mono hover:border-border-4 hover:text-text-primary"
+        value={selected ?? ""}
+        onChange={(e) => onSelect(e.target.value || null)}
+      >
+        <option value="">— select —</option>
+        {workItems.map((wi) => (
+          <option key={wi.id} value={wi.id}>
+            {wi.title} · {wi.status}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
 
-// ── Empty state ───────────────────────────────────────────────────────────────
+// ── Legend ────────────────────────────────────────────────────────────────────
 
-function EmptyState() {
+function Legend({ tasks }: { tasks: Task[] }) {
+  const statusCounts = tasks.reduce<Record<string, number>>((acc, t) => {
+    acc[t.status] = (acc[t.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-      <div className="w-10 h-10 rounded-xl bg-surface-2 border border-border-3 flex items-center justify-center">
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          className="text-text-dim"
-        >
-          <circle cx="5" cy="12" r="2" />
-          <circle cx="19" cy="5" r="2" />
-          <circle cx="19" cy="19" r="2" />
-          <line x1="7" y1="11.5" x2="17" y2="6.5" />
-          <line x1="7" y1="12.5" x2="17" y2="17.5" />
-        </svg>
-      </div>
-      <p className="text-sm font-medium text-text-primary">
-        Select a work item
-      </p>
-      <p className="text-xs text-text-muted">
-        Choose one from the dropdown to visualize its task graph
-      </p>
+    <div
+      className="px-5 py-3 border-t border-border-2 flex items-center gap-1 flex-wrap"
+      style={{ background: "rgba(5,10,15,0.6)" }}
+    >
+      <span className="text-[9px] font-mono text-text-dim uppercase tracking-widest mr-2">
+        Legend
+      </span>
+      {Object.entries(statusCounts).map(([status, count]) => {
+        const cfg = STATUS_GLOW[status] ?? FALLBACK_GLOW;
+        return (
+          <span
+            key={status}
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded-md mr-1"
+            style={{ background: `${cfg.shadow}` }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: cfg.accent }}
+            />
+            <span
+              className="text-[10px] font-mono"
+              style={{ color: cfg.accent }}
+            >
+              {status}
+            </span>
+            <span className="text-[10px] font-mono text-text-dim">
+              ×{count}
+            </span>
+          </span>
+        );
+      })}
+      <span className="ml-auto text-[10px] font-mono text-text-dim">
+        {tasks.length} tasks total
+      </span>
     </div>
   );
 }
@@ -100,13 +209,15 @@ export function DagPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
 
-  useEffect(() => {
+  const loadWorkItems = useCallback(() => {
     fetchWorkItems().then(setWorkItems).catch(console.error);
-    const interval = setInterval(() => {
-      fetchWorkItems().then(setWorkItems).catch(console.error);
-    }, 5000);
-    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    loadWorkItems();
+    const interval = setInterval(loadWorkItems, 5000);
+    return () => clearInterval(interval);
+  }, [loadWorkItems]);
 
   useEffect(() => {
     if (!selected) return;
@@ -115,71 +226,66 @@ export function DagPage() {
       .catch(console.error);
   }, [selected]);
 
-  const nodes: Node[] = tasks.map((task, i) => ({
-    id: task.id,
-    position: { x: 100 + (i % 3) * 240, y: 80 + Math.floor(i / 3) * 130 },
-    data: {
-      label: (
-        <div className="text-xs leading-snug">
-          <div className="font-medium text-[#f8fafc] truncate max-w-[160px] mb-1">
-            {task.description}
-          </div>
-          <div
-            className="font-mono"
-            style={{ color: STATUS_COLOR[task.status] ?? "#9ca3af" }}
-          >
-            {task.status}
-          </div>
-        </div>
-      ),
-    },
-    style: {
-      background: "#0f172a",
-      border: `1px solid ${STATUS_COLOR[task.status] ?? "#1e293b"}`,
-      borderRadius: 10,
-      color: "#f8fafc",
-      padding: "10px 14px",
-      minWidth: 190,
-      boxShadow: `0 0 0 1px ${STATUS_COLOR[task.status] ?? "#1e293b"}22`,
-    },
-  }));
-
+  const nodes: Node[] = buildNodes(tasks);
   const edges: Edge[] = [];
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full animate-fade-in">
       <PageHeader
-        workItems={workItems}
-        selected={selected}
-        onSelect={setSelected}
+        title="DAG View"
+        description="Task dependency graph visualizer"
+        actions={
+          <WorkItemSelector
+            workItems={workItems}
+            selected={selected}
+            onSelect={setSelected}
+          />
+        }
       />
 
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 relative">
         {!selected ? (
-          <EmptyState />
+          <EmptyState
+            icon={
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <circle cx="5" cy="12" r="2" />
+                <circle cx="19" cy="5" r="2" />
+                <circle cx="19" cy="19" r="2" />
+                <line x1="7" y1="11.5" x2="17" y2="6.5" />
+                <line x1="7" y1="12.5" x2="17" y2="17.5" />
+              </svg>
+            }
+            title="Select a work item"
+            description="Choose a work item from the dropdown to visualize its task dependency graph"
+          />
         ) : (
-          <ReactFlow nodes={nodes} edges={edges} fitView>
-            <Background color="#1e293b" gap={20} />
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            fitView
+            fitViewOptions={{ padding: 0.2 }}
+            minZoom={0.3}
+            maxZoom={2}
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              color="rgba(46,74,106,0.35)"
+              gap={24}
+              size={1}
+            />
             <Controls />
           </ReactFlow>
         )}
       </div>
 
-      {selected && tasks.length > 0 && (
-        <div className="px-6 py-3 border-t border-border-2 flex items-center gap-4">
-          {Object.entries(STATUS_COLOR).map(([status, color]) => (
-            <span key={status} className="flex items-center gap-1.5">
-              <span
-                className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: color }}
-              />
-              <span className="text-xs text-text-muted font-mono">
-                {status}
-              </span>
-            </span>
-          ))}
-        </div>
-      )}
+      {selected && tasks.length > 0 && <Legend tasks={tasks} />}
     </div>
   );
 }

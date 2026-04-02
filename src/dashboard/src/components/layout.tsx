@@ -1,12 +1,10 @@
 import { NavLink, Outlet } from "react-router-dom";
 
-// ── Icons ─────────────────────────────────────────────────────────────────────
-
 function IconDag() {
   return (
     <svg
-      width="16"
-      height="16"
+      width="15"
+      height="15"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -26,8 +24,8 @@ function IconDag() {
 function IconSessions() {
   return (
     <svg
-      width="16"
-      height="16"
+      width="15"
+      height="15"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -44,8 +42,8 @@ function IconSessions() {
 function IconMetrics() {
   return (
     <svg
-      width="16"
-      height="16"
+      width="15"
+      height="15"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -53,9 +51,7 @@ function IconMetrics() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <line x1="18" y1="20" x2="18" y2="10" />
-      <line x1="12" y1="20" x2="12" y2="4" />
-      <line x1="6" y1="20" x2="6" y2="14" />
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
     </svg>
   );
 }
@@ -63,8 +59,8 @@ function IconMetrics() {
 function IconLogs() {
   return (
     <svg
-      width="16"
-      height="16"
+      width="15"
+      height="15"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -72,19 +68,21 @@ function IconLogs() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="8" y1="13" x2="16" y2="13" />
-      <line x1="8" y1="17" x2="13" y2="17" />
+      <line x1="8" y1="6" x2="21" y2="6" />
+      <line x1="8" y1="12" x2="21" y2="12" />
+      <line x1="8" y1="18" x2="21" y2="18" />
+      <line x1="3" y1="6" x2="3.01" y2="6" />
+      <line x1="3" y1="12" x2="3.01" y2="12" />
+      <line x1="3" y1="18" x2="3.01" y2="18" />
     </svg>
   );
 }
 
-function IconEngine() {
+function LogoMark() {
   return (
     <svg
-      width="16"
-      height="16"
+      width="18"
+      height="18"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -97,42 +95,62 @@ function IconEngine() {
   );
 }
 
-// ── Nav config ────────────────────────────────────────────────────────────────
-
 const NAV = [
-  { to: "/dag", label: "DAG", Icon: IconDag },
-  { to: "/sessions", label: "Sessions", Icon: IconSessions },
-  { to: "/metrics", label: "Metrics", Icon: IconMetrics },
-  { to: "/logs", label: "Logs", Icon: IconLogs },
+  { to: "/dag", label: "DAG", Icon: IconDag, desc: "Task graph" },
+  {
+    to: "/sessions",
+    label: "Sessions",
+    Icon: IconSessions,
+    desc: "Live agents",
+  },
+  { to: "/metrics", label: "Metrics", Icon: IconMetrics, desc: "Performance" },
+  { to: "/logs", label: "Logs", Icon: IconLogs, desc: "Telemetry" },
 ];
-
-// ── Layout ────────────────────────────────────────────────────────────────────
 
 export function Layout() {
   return (
     <div className="flex h-screen bg-bg text-text-primary overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-56 shrink-0 flex flex-col bg-surface border-r border-border-2">
+      <aside
+        className="w-52 shrink-0 flex flex-col border-r border-border-2"
+        style={{
+          background: "linear-gradient(180deg, #0a1628 0%, #050a0f 100%)",
+        }}
+      >
         {/* Brand */}
-        <div className="px-4 py-4 border-b border-border-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-accent-glow border border-accent/20 flex items-center justify-center text-accent shrink-0">
-              <IconEngine />
+        <div className="px-4 py-5 border-b border-border-2">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-accent glow-pulse"
+              style={{
+                background:
+                  "linear-gradient(135deg, rgba(0,212,255,0.12), rgba(57,255,140,0.06))",
+                border: "1px solid rgba(0,212,255,0.2)",
+              }}
+            >
+              <LogoMark />
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-semibold text-text-primary leading-none tracking-tight">
                 Claw Engine
               </p>
-              <p className="font-mono text-[10px] text-text-dim mt-0.5 leading-none">
-                model-agnostic
+              <p className="font-mono text-[9px] text-text-muted mt-1 leading-none tracking-widest uppercase">
+                Agent Factory
               </p>
             </div>
           </div>
         </div>
 
+        {/* Divider label */}
+        <div className="px-4 pt-4 pb-1.5">
+          <p className="text-[9px] font-mono text-text-dim tracking-widest uppercase">
+            Navigation
+          </p>
+        </div>
+
         {/* Navigation */}
         <nav
-          className="flex-1 px-2.5 py-3 space-y-0.5"
+          className="flex-1 px-2.5 pb-3 space-y-0.5"
           aria-label="Main navigation"
         >
           {NAV.map(({ to, label, Icon }) => (
@@ -140,17 +158,34 @@ export function Layout() {
               key={to}
               to={to}
               className={({ isActive }) =>
-                `relative flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-150 cursor-pointer ${
+                `relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer group ${
                   isActive
-                    ? "bg-accent-glow text-accent"
-                    : "text-text-muted hover:bg-surface-2 hover:text-text-primary"
+                    ? "text-accent"
+                    : "text-text-muted hover:text-text-secondary"
                 }`
+              }
+              style={({ isActive }) =>
+                isActive
+                  ? {
+                      background:
+                        "linear-gradient(90deg, rgba(0,212,255,0.08), transparent)",
+                      border: "1px solid rgba(0,212,255,0.12)",
+                    }
+                  : {
+                      background: "transparent",
+                      border: "1px solid transparent",
+                    }
               }
             >
               {({ isActive }) => (
                 <>
                   {isActive && (
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-accent rounded-r-full" />
+                    <span
+                      className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 rounded-r-full"
+                      style={{
+                        background: "linear-gradient(180deg, #00d4ff, #39ff8c)",
+                      }}
+                    />
                   )}
                   <Icon />
                   {label}
@@ -161,17 +196,27 @@ export function Layout() {
         </nav>
 
         {/* Footer */}
-        <div className="px-4 py-3 border-t border-border-2 flex items-center justify-between">
-          <span className="font-mono text-[10px] text-text-dim">v0.1.0</span>
+        <div
+          className="px-4 py-3 border-t border-border-2 flex items-center justify-between"
+          style={{ background: "rgba(0,0,0,0.2)" }}
+        >
+          <span className="font-mono text-[9px] text-text-dim tracking-widest">
+            v0.1.0
+          </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-accent status-pulse" />
-            <span className="font-mono text-[10px] text-text-dim">live</span>
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-neon status-pulse"
+              style={{ boxShadow: "0 0 6px rgba(57,255,140,0.6)" }}
+            />
+            <span className="font-mono text-[9px] text-text-muted tracking-wide">
+              LIVE
+            </span>
           </span>
         </div>
       </aside>
 
       {/* Main */}
-      <main className="flex-1 overflow-y-auto min-w-0">
+      <main className="flex-1 overflow-y-auto min-w-0 bg-bg">
         <Outlet />
       </main>
     </div>
