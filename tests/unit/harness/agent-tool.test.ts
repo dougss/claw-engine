@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { HarnessEvent } from "../../../src/harness/events.js";
 
 // ── Mock runClaudePipe before importing the tool ────────────────────────────
@@ -6,7 +6,10 @@ vi.mock("../../../src/integrations/claude-p/claude-pipe.js", () => ({
   runClaudePipe: vi.fn(),
 }));
 
-import { spawnAgentTool } from "../../../src/harness/tools/builtins/agent-tool.js";
+import {
+  spawnAgentTool,
+  clearAgentsForTest,
+} from "../../../src/harness/tools/builtins/agent-tool.js";
 import { runClaudePipe } from "../../../src/integrations/claude-p/claude-pipe.js";
 
 // Helper: create an async generator from an array of HarnessEvents
@@ -221,8 +224,11 @@ describe("spawnAgentTool", () => {
     });
   });
 
-  // ── Concurrent limit enforcement ────────────────────────────────────────────
   describe("concurrent sub-agent limit", () => {
+    afterEach(() => {
+      clearAgentsForTest();
+    });
+
     it("enforces max 3 concurrent sub-agents", async () => {
       // Three slow foreground-style tasks that never resolve (background=false
       // uses the same slot tracking). Use background=true which adds to the Map

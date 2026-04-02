@@ -7,11 +7,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const MAX_CONCURRENT_AGENTS = 3;
 
-/**
- * Tracks running agents (both background and foreground): taskId → Promise<string>.
- * Module-level so the limit is shared across all tool invocations.
- */
-const backgroundAgents = new Map<string, Promise<string>>();
+const runningAgents = new Map<string, Promise<string>>();
+
+export function clearAgentsForTest(): void {
+  if (process.env.NODE_ENV !== "test") return;
+  runningAgents.clear();
+}
 
 /** Monotonic counter appended to Date.now() to guarantee unique IDs within a ms. */
 let _agentSeq = 0;
@@ -60,7 +61,7 @@ export const spawnAgentTool: ToolHandler = {
       };
     }
 
-    if (backgroundAgents.size >= MAX_CONCURRENT_AGENTS) {
+    if (runningAgents.size >= MAX_CONCURRENT_AGENTS) {
       return {
         output: `max concurrent sub-agents (${MAX_CONCURRENT_AGENTS}) reached`,
         isError: true,
@@ -105,11 +106,13 @@ export const spawnAgentTool: ToolHandler = {
           }
         }
         return output;
-      })().finally(() => {
-        backgroundAgents.delete(taskId);
-      });
+      })()
+        .finally(() => {
+          runningAgents.delete(taskId);
+        })
+        .catch((): string => "");
 
-      backgroundAgents.set(taskId, promise);
+      runningAgents.set(taskId, promise);
 
       return {
         output: JSON.stringify({ taskId, status: "backgrounded" }),
@@ -120,7 +123,7 @@ export const spawnAgentTool: ToolHandler = {
     // ── Foreground: use runClaudePipe and accumulate text_delta events ──────────
     const taskId = makeAgentId();
     const placeholder = Promise.resolve("");
-    backgroundAgents.set(taskId, placeholder);
+    runningAgents.set(taskId, placeholder);
 
     try {
       let output = "";
@@ -140,7 +143,7 @@ export const spawnAgentTool: ToolHandler = {
       const message = error instanceof Error ? error.message : String(error);
       return { output: `agent failed: ${message}`, isError: true };
     } finally {
-      backgroundAgents.delete(taskId);
+      runningAgents.delete(taskId);
     }
   },
 };

@@ -35,6 +35,7 @@ export interface PipelineContext {
   githubPrivateKeyPath?: string;
   /** GitHub bot user ID — used to build the noreply commit email (e.g. 12345+claw-engine[bot]@...). */
   githubBotUserId?: string;
+  defaultBranch?: string;
 }
 
 export interface PipelineResult {
@@ -45,10 +46,37 @@ export interface PipelineResult {
   prUrl: string | null;
 }
 
-// ── GIT COMMIT + PUSH ─────────────────────────────────────────────────────────
+const GIT_EXEC_TIMEOUT_MS = 300_000;
+
+function gitExecSyncOptions(repoPath: string) {
+  return {
+    cwd: repoPath,
+    encoding: "utf-8" as const,
+    timeout: GIT_EXEC_TIMEOUT_MS,
+  };
+}
+
+function resolveDefaultBranch(repoPath: string): string {
+  const opts = gitExecSyncOptions(repoPath);
+  try {
+    const sym = execSync("git symbolic-ref refs/remotes/origin/HEAD", opts)
+      .trim();
+    const last = sym.split("/").pop();
+    if (last && last !== "HEAD") return last;
+  } catch {}
+  try {
+    const out = execSync("git remote show origin", {
+      ...opts,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    const m = /HEAD branch:\s*(.+)/.exec(out);
+    if (m?.[1]) return m[1].trim();
+  } catch {}
+  return "main";
+}
 
 function gitCommitAndPush(repoPath: string, prompt: string): string {
-  const opts = { cwd: repoPath, encoding: "utf-8" as const };
+  const opts = gitExecSyncOptions(repoPath);
 
   const status = execSync("git status --porcelain", opts).trim();
   if (!status) return execSync("git rev-parse --abbrev-ref HEAD", opts).trim();
@@ -57,6 +85,9 @@ function gitCommitAndPush(repoPath: string, prompt: string): string {
     "git rev-parse --abbrev-ref HEAD",
     opts,
   ).trim();
+  if (currentBranch === "HEAD") {
+    throw new Error("Cannot commit from detached HEAD state");
+  }
   let branch = currentBranch;
   if (currentBranch === "main" || currentBranch === "master") {
     branch = `claw/run-${Date.now()}`;
@@ -317,6 +348,7 @@ interface PrPhaseInput {
   openPr?: boolean;
   execGh?: (args: string[], cwd: string) => Promise<string>;
   branch?: string;
+  baseBranch?: string;
 }
 
 export async function prPhase({
@@ -327,6 +359,7 @@ export async function prPhase({
   openPr = true,
   execGh,
   branch,
+  baseBranch,
 }: PrPhaseInput): Promise<string | null> {
   if (!openPr) return null;
 
@@ -352,7 +385,8 @@ export async function prPhase({
   try {
     const args = ["pr", "create", "--title", title, "--body", review];
     if (branch) {
-      args.push("--base", "main", "--head", branch);
+      const base = baseBranch ?? resolveDefaultBranch(repoPath);
+      args.push("--base", base, "--head", branch);
     }
     const url = await exec(args, repoPath);
     const durationMs = Date.now() - start;
@@ -390,6 +424,7 @@ export async function runPipeline(
     githubInstallationId,
     githubPrivateKeyPath,
     githubBotUserId,
+    defaultBranch,
   } = input;
   const validationSteps = config.validation.typescript;
 
@@ -499,6 +534,8 @@ export async function runPipeline(
     }
   }
 
+  const prBase = defaultBranch ?? resolveDefaultBranch(repoPath);
+
   const prUrl = await prPhase({
     repoPath,
     prompt,
@@ -507,6 +544,7 @@ export async function runPipeline(
     openPr,
     execGh: prExecGh,
     branch: prBranch,
+    baseBranch: prBase,
   });
 
   return { plan, executeSuccess: true, validation, review, prUrl };
