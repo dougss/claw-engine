@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ReactFlow,
   Background,
@@ -222,8 +223,11 @@ function Legend({ tasks }: { tasks: TaskFull[] }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export function DagPage() {
+  const [searchParams] = useSearchParams();
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(
+    searchParams.get("wi"),
+  );
   const [tasks, setTasks] = useState<TaskFull[]>([]);
 
   const loadWorkItems = useCallback(() => {

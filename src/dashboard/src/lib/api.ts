@@ -6,6 +6,9 @@ export interface WorkItem {
   description: string | null;
   status: string;
   createdAt: string;
+  updatedAt: string;
+  totalTokensUsed: number;
+  totalCostUsd: string;
   tasksTotal: number;
   tasksCompleted: number;
 }
@@ -18,6 +21,17 @@ export interface Task {
   tokensUsed: number;
   costUsd: string;
   createdAt: string;
+}
+
+export interface TaskFull extends Task {
+  dagNodeId: string;
+  repo: string;
+  dependsOn: string[] | null;
+  workItemId: string;
+}
+
+export interface Execution extends WorkItem {
+  tasks: TaskFull[];
 }
 
 export interface Metrics {
@@ -36,6 +50,12 @@ export interface Metrics {
   };
 }
 
+export async function fetchExecutions(limit = 50): Promise<Execution[]> {
+  const res = await fetch(`${BASE}/work-items?with_tasks=1&limit=${limit}`);
+  const data = (await res.json()) as { items: Execution[] };
+  return data.items;
+}
+
 export async function fetchWorkItems(status?: string): Promise<WorkItem[]> {
   const url = status
     ? `${BASE}/work-items?status=${status}`
@@ -47,21 +67,14 @@ export async function fetchWorkItems(status?: string): Promise<WorkItem[]> {
 
 export async function fetchWorkItem(
   id: string,
-): Promise<WorkItem & { tasks: Task[] }> {
+): Promise<WorkItem & { tasks: TaskFull[] }> {
   const res = await fetch(`${BASE}/work-items/${id}`);
-  return res.json() as Promise<WorkItem & { tasks: Task[] }>;
+  return res.json() as Promise<WorkItem & { tasks: TaskFull[] }>;
 }
 
 export async function fetchMetrics(): Promise<Metrics> {
   const res = await fetch(`${BASE}/metrics`);
   return res.json() as Promise<Metrics>;
-}
-
-export interface TaskFull extends Task {
-  dagNodeId: string;
-  repo: string;
-  dependsOn: string[] | null;
-  workItemId: string;
 }
 
 export async function fetchSessions(): Promise<TaskFull[]> {

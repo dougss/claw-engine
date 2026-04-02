@@ -172,6 +172,9 @@ export function createAlibabaAdapter({
         { id: string; name: string; arguments: string }
       >();
       let totalTokens = 0;
+      // DashScope sends usage in a SEPARATE final chunk after finish_reason.
+      // We drain the full stream before emitting token_update so we capture it.
+      let finishReason: string | null = null;
 
       try {
         outer: while (true) {
@@ -211,6 +214,7 @@ export function createAlibabaAdapter({
               usage?: { prompt_tokens: number; completion_tokens: number };
             };
 
+            // Always capture usage — may arrive in a chunk with empty choices
             if (c.usage) {
               totalTokens = c.usage.prompt_tokens + c.usage.completion_tokens;
             }
@@ -250,17 +254,16 @@ export function createAlibabaAdapter({
                 yield { type: "tool_use", id: tc.id, name: tc.name, input };
               }
               pendingToolCalls.clear();
+              // Don't return yet — keep draining to capture the usage chunk
+              finishReason = "tool_calls";
             } else if (choice.finish_reason === "length") {
-              // Output token limit hit. If tool calls were accumulating, try to
-              // yield them anyway — arguments may be truncated but at least the
-              // agent loop will see the tool use and can react.
+              // Output token limit hit — yield any pending tool calls (truncated)
               if (pendingToolCalls.size > 0) {
                 for (const [, tc] of pendingToolCalls) {
                   let input: unknown = {};
                   try {
                     input = JSON.parse(tc.arguments);
                   } catch {
-                    // Truncated JSON — extract whatever fields parsed cleanly
                     const partial = tc.arguments
                       .replace(/,?\s*"[^"]*"\s*:\s*[^,}]*$/, "")
                       .trimEnd();
@@ -274,34 +277,28 @@ export function createAlibabaAdapter({
                 }
                 pendingToolCalls.clear();
               }
-              if (totalTokens > 0) {
-                yield {
-                  type: "token_update",
-                  used: totalTokens,
-                  budget: maxContext,
-                  percent: Math.round((totalTokens / maxContext) * 100),
-                };
-              }
-              return;
+              finishReason = "length";
             } else if (choice.finish_reason === "stop") {
-              if (totalTokens > 0) {
-                yield {
-                  type: "token_update",
-                  used: totalTokens,
-                  budget: maxContext,
-                  percent: Math.round((totalTokens / maxContext) * 100),
-                };
-              }
-              // Do NOT yield session_end here — session lifecycle is managed by
-              // the agent loop. The adapter's job ends when the stream ends.
-              return;
+              finishReason = "stop";
+              // Keep draining — usage chunk may follow
             }
           }
         }
       } finally {
         reader.releaseLock();
       }
-      // Stream ended — agent loop decides what happens next.
+
+      // Emit token_update after stream is fully drained (captures late usage chunk)
+      if (totalTokens > 0) {
+        yield {
+          type: "token_update",
+          used: totalTokens,
+          budget: maxContext,
+          percent: Math.round((totalTokens / maxContext) * 100),
+        };
+      }
+      // Do NOT yield session_end — session lifecycle is managed by the agent loop.
+      void finishReason; // consumed above, suppress unused warning
     },
   };
 }

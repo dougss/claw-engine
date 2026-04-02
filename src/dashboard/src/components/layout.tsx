@@ -99,9 +99,9 @@ const NAV = [
   { to: "/dag", label: "DAG", Icon: IconDag, desc: "Task graph" },
   {
     to: "/sessions",
-    label: "Sessions",
+    label: "Executions",
     Icon: IconSessions,
-    desc: "Live agents",
+    desc: "Run history",
   },
   { to: "/metrics", label: "Metrics", Icon: IconMetrics, desc: "Performance" },
   { to: "/logs", label: "Logs", Icon: IconLogs, desc: "Telemetry" },
