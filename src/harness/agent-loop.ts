@@ -69,14 +69,15 @@ function getToolHandler({
 const DEFAULT_MAX_RESULT_SIZE: Record<string, number> = {
   bash: 100000,
   grep: 50000,
-  glob: 20000,
+  read_file: Infinity, // No limit for read_file - users control with offset/limit params
 };
 const FALLBACK_MAX_RESULT_SIZE = 50000;
 
 function truncateOutput(output: string, maxChars: number): string {
-  if (output.length <= maxChars) return output;
+  if (output.length <= maxChars || maxChars === Infinity) return output;
   return (
-    output.slice(0, maxChars) + `... [output truncated at ${maxChars} chars]`
+    output.slice(0, maxChars) + 
+    `\n... [output truncated at ${maxChars} chars. Use more specific commands or add offset/limit params]`
   );
 }
 
