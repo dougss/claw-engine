@@ -13,61 +13,80 @@ interface UseStreamResult {
   isLive: boolean;
 }
 
+function telemetryToEvents(telemetry: TelemetryEntry[]): StreamEvent[] {
+  return telemetry.map((entry, i) => ({
+    id: entry.id || `hist-${i}`,
+    type: entry.eventType || "unknown",
+    timestamp: new Date(entry.createdAt).getTime(),
+    data: (entry.data as Record<string, unknown>) || {},
+  }));
+}
+
+const SSE_EVENT_TYPES = [
+  "session_start",
+  "session_end",
+  "session_resume",
+  "text_delta",
+  "tool_use",
+  "tool_result",
+  "token_update",
+  "checkpoint",
+  "compaction",
+  "api_retry",
+  "model_fallback",
+  "permission_denied",
+  "validation_result",
+  "phase_start",
+  "phase_end",
+  "routing_decision",
+  "error",
+  "heartbeat",
+] as const;
+
 export const useStream = (
   taskId: string | null,
   taskStatus: string,
 ): UseStreamResult => {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [isLive, setIsLive] = useState(false);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const esRef = useRef<EventSource | null>(null);
 
-  // Clear events and close SSE connection when taskId changes
   useEffect(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+    // Cleanup previous
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
     }
-
     setEvents([]);
     setIsLive(false);
 
-    if (!taskId) {
-      return;
-    }
+    if (!taskId) return;
 
-    if (taskStatus === "running") {
-      // Connect to SSE stream
-      const url = `/api/v1/tasks/${taskId}/stream`;
-
+    // Always load historical telemetry first
+    let cancelled = false;
+    const loadHistory = async () => {
       try {
-        const es = new EventSource(url);
-        eventSourceRef.current = es;
+        const detail = await fetchTaskWithTelemetry(taskId);
+        if (cancelled) return;
+        const telemetry = detail?.telemetry ?? [];
+        if (telemetry.length > 0) {
+          setEvents(telemetryToEvents(telemetry));
+        }
+      } catch {
+        // best-effort
+      }
+    };
+
+    loadHistory();
+
+    // If running, also connect SSE for new events
+    if (taskStatus === "running") {
+      try {
+        const es = new EventSource(`/api/v1/tasks/${taskId}/stream`);
+        esRef.current = es;
         setIsLive(true);
 
-        // Server sends named events (event: <type>), not unnamed messages.
-        // Must use addEventListener for each type.
-        const EVENT_TYPES = [
-          "session_start",
-          "session_end",
-          "session_resume",
-          "text_delta",
-          "tool_use",
-          "tool_result",
-          "token_update",
-          "checkpoint",
-          "compaction",
-          "api_retry",
-          "model_fallback",
-          "permission_denied",
-          "validation_result",
-          "phase_start",
-          "phase_end",
-          "routing_decision",
-          "error",
-          "heartbeat",
-        ] as const;
-
-        const handleNamedEvent = (ev: MessageEvent) => {
+        const handleEvent = (ev: MessageEvent) => {
           try {
             const data = JSON.parse(ev.data) as Record<string, unknown>;
             const streamEvent: StreamEvent = {
@@ -80,56 +99,30 @@ export const useStream = (
               data: (data.data as Record<string, unknown>) ?? data,
             };
             setEvents((prev) => [...prev, streamEvent]);
-          } catch (error) {
-            console.error("Error parsing SSE event:", error);
+          } catch {
+            // ignore malformed
           }
         };
 
-        for (const type of EVENT_TYPES) {
-          es.addEventListener(type, handleNamedEvent as EventListener);
+        for (const type of SSE_EVENT_TYPES) {
+          es.addEventListener(type, handleEvent as EventListener);
         }
 
         es.onerror = () => {
           setIsLive(false);
           es.close();
-          eventSourceRef.current = null;
+          esRef.current = null;
         };
-      } catch (error) {
-        console.error("Error connecting to SSE:", error);
+      } catch {
         setIsLive(false);
       }
-    } else if (taskStatus === "completed" || taskStatus === "failed") {
-      // Fetch historical data
-      const fetchData = async () => {
-        try {
-          const taskDetail = await fetchTaskWithTelemetry(taskId);
-
-          if (taskDetail && taskDetail.telemetry) {
-            // Convert telemetry array to StreamEvent format
-            const historicalEvents: StreamEvent[] = taskDetail.telemetry.map(
-              (telemetryEntry: TelemetryEntry, index: number) => ({
-                id: telemetryEntry.id || `historical-${index}`,
-                type: telemetryEntry.eventType || "unknown",
-                timestamp: new Date(telemetryEntry.createdAt).getTime(),
-                data: (telemetryEntry.data as Record<string, unknown>) || {},
-              }),
-            );
-
-            setEvents(historicalEvents);
-          }
-        } catch (error) {
-          console.error("Error fetching historical data:", error);
-        }
-      };
-
-      fetchData();
     }
 
-    // Cleanup function
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
+      cancelled = true;
+      if (esRef.current) {
+        esRef.current.close();
+        esRef.current = null;
       }
     };
   }, [taskId, taskStatus]);

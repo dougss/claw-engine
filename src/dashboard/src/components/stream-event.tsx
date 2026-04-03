@@ -6,61 +6,98 @@ interface StreamEventProps {
   now: number;
 }
 
+const formatTime = (now: number, timestamp: number): string => {
+  const diff = now - timestamp;
+  if (diff < 60000) return `${Math.max(0, Math.floor(diff / 1000))}s`;
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  return `${Math.floor(diff / 3600000)}h`;
+};
+
+const formatTokens = (n: number): string => {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return String(n);
+};
+
+/** Pretty-print tool input: extract the most relevant field as a short preview */
+function formatToolInput(input: unknown): string {
+  if (!input || typeof input !== "object") return "";
+  const obj = input as Record<string, unknown>;
+
+  // Common patterns: show the most meaningful field
+  if (typeof obj.filePath === "string") return obj.filePath as string;
+  if (typeof obj.file_path === "string") return obj.file_path as string;
+  if (typeof obj.path === "string") return obj.path as string;
+  if (typeof obj.command === "string") {
+    const cmd = obj.command as string;
+    return cmd.length > 80 ? cmd.slice(0, 77) + "..." : cmd;
+  }
+  if (typeof obj.pattern === "string") return obj.pattern as string;
+  if (typeof obj.query === "string") return obj.query as string;
+  if (typeof obj.content === "string")
+    return (obj.content as string).slice(0, 60) + "...";
+
+  // Fallback: compact JSON, truncated
+  const json = JSON.stringify(obj);
+  return json.length > 80 ? json.slice(0, 77) + "..." : json;
+}
+
+const Timestamp: React.FC<{ now: number; ts: number }> = ({ now, ts }) => (
+  <span className="text-xs font-mono text-text-tertiary w-12 shrink-0 text-right">
+    {formatTime(now, ts)}
+  </span>
+);
+
+const Row: React.FC<{ children: React.ReactNode; className?: string }> = ({
+  children,
+  className = "",
+}) => (
+  <div className={`flex items-start gap-3 px-4 py-1.5 ${className}`}>
+    {children}
+  </div>
+);
+
 const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
   const { type, timestamp, data } = event;
 
-  // Calculate relative time
-  const timeDiff = now - timestamp;
-  let timeLabel = "";
-  if (timeDiff < 60000) {
-    timeLabel = `${Math.max(0, Math.floor(timeDiff / 1000))}s`;
-  } else if (timeDiff < 3600000) {
-    timeLabel = `${Math.floor(timeDiff / 60000)}m`;
-  } else {
-    timeLabel = `${Math.floor(timeDiff / 3600000)}h`;
-  }
-
-  // Handle different event types
   switch (type) {
     case "heartbeat":
       return null;
 
     case "tool_use": {
       const name = (data.name as string) || "";
-      const input = data.input;
-      let inputPreview = "";
-      if (typeof input === "string") {
-        inputPreview = input.substring(0, 80);
-      } else if (input && typeof input === "object") {
-        inputPreview = JSON.stringify(input).substring(0, 80);
-      }
+      const preview = formatToolInput(data.input);
 
       return (
-        <div className="flex items-start gap-3 px-4 py-1">
-          <span className="text-xs font-mono text-text-tertiary w-12 shrink-0">
-            {timeLabel}
-          </span>
-          <div className="flex items-center gap-2">
-            <span className="text-stream-tool font-mono text-xs px-2 py-0.5 rounded bg-stream-tool/10">
-              [tool]
-            </span>
-            <span className="font-mono text-sm">{`${name}${inputPreview ? `(${inputPreview})` : ""}`}</span>
+        <Row>
+          <Timestamp now={now} ts={timestamp} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-stream-tool font-mono text-xs font-medium">
+                {name}
+              </span>
+            </div>
+            {preview && (
+              <div className="font-mono text-xs text-text-secondary mt-0.5 truncate">
+                {preview}
+              </div>
+            )}
           </div>
-        </div>
+        </Row>
       );
     }
 
     case "text_delta": {
       const text = (data.text as string) || "";
-      if (!text) return null;
+      if (!text.trim()) return null;
 
       return (
-        <div className="flex items-start gap-3 px-4 py-1">
-          <span className="text-xs font-mono text-text-tertiary w-12 shrink-0">
-            {timeLabel}
-          </span>
-          <div className="text-sm text-stream-text">{text}</div>
-        </div>
+        <Row>
+          <Timestamp now={now} ts={timestamp} />
+          <div className="text-sm text-stream-text whitespace-pre-wrap min-w-0 flex-1">
+            {text}
+          </div>
+        </Row>
       );
     }
 
@@ -68,127 +105,103 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
       const percent = data.percent as number | undefined;
       if (typeof percent !== "number") return null;
 
-      // Only render if percent changed by >=5
-      const prevPercent = data.prev_percent as number | undefined;
-      if (prevPercent !== undefined && Math.abs(percent - prevPercent) < 5) {
-        return null;
-      }
-
-      const usedTokens = (data.used_tokens as number) || 0;
-      const totalTokens = (data.total_tokens as number) || 0;
-      const formattedUsed = formatTokens(usedTokens);
-      const formattedTotal = formatTokens(totalTokens);
+      const used = (data.used as number) || 0;
+      const budget = (data.budget as number) || 0;
 
       return (
-        <div className="flex items-start gap-3 px-4 py-1">
-          <span className="text-xs font-mono text-text-tertiary w-12 shrink-0">
-            {timeLabel}
-          </span>
-          <div className="text-stream-token font-mono text-sm">
-            tokens {percent.toFixed(0)}% ({formattedUsed} / {formattedTotal})
+        <Row className="opacity-50">
+          <Timestamp now={now} ts={timestamp} />
+          <div className="text-stream-token font-mono text-xs">
+            ⬡ {percent}% — {formatTokens(used)} / {formatTokens(budget)}
           </div>
-        </div>
+        </Row>
       );
     }
 
     case "session_end": {
-      const status = (data.status as string) || "";
-      const reason = (data.reason as string) || "";
-      let bgColor = "bg-status-completed/10";
+      const reason = (data.reason as string) || "unknown";
+      const isSuccess = reason === "completed";
+      const isFailed = reason === "error" || reason === "failed";
 
-      if (status === "failed") {
-        bgColor = "bg-status-failed/10";
-      } else if (status === "interrupted" || status === "cancelled") {
-        bgColor = "bg-status-running/10";
-      }
+      const bg = isSuccess
+        ? "bg-status-completed/10 border-status-completed/20"
+        : isFailed
+          ? "bg-status-failed/10 border-status-failed/20"
+          : "bg-status-running/10 border-status-running/20";
+      const text = isSuccess
+        ? "text-status-completed"
+        : isFailed
+          ? "text-status-failed"
+          : "text-status-running";
+      const icon = isSuccess ? "✓" : isFailed ? "✗" : "⏹";
 
       return (
-        <div className={`flex items-start gap-3 px-4 py-1 ${bgColor}`}>
-          <span className="text-xs font-mono text-text-tertiary w-12 shrink-0"></span>
-          <div className="w-full text-center py-2 text-sm">
-            Session {status}: {reason}
-          </div>
+        <div className={`mx-4 my-2 px-4 py-2 rounded border ${bg}`}>
+          <span className={`text-sm font-medium ${text}`}>
+            {icon} Session {reason}
+          </span>
         </div>
       );
     }
 
     case "routing_decision": {
-      const provider = (data.provider as string) || "";
+      const mode = (data.mode as string) || "";
       const reason = (data.reason as string) || "";
+      const complexity = (data.complexity as string) || "";
 
       return (
-        <div className="flex items-start gap-3 px-4 py-1">
-          <span className="text-xs font-mono text-text-tertiary w-12 shrink-0">
-            {timeLabel}
-          </span>
-          <div className="text-text-tertiary text-xs">
-            routed → {provider} {reason ? `(${reason})` : ""}
+        <Row className="opacity-40">
+          <Timestamp now={now} ts={timestamp} />
+          <div className="text-xs">
+            ⟶ {mode} · {complexity}
+            {reason ? ` · ${reason}` : ""}
           </div>
-        </div>
+        </Row>
       );
     }
 
     case "phase_start": {
-      const phase = (data.phase as string) || "";
+      const phase = ((data.phase as string) || "").toUpperCase();
+      const attempt = data.attempt as number | undefined;
 
       return (
-        <div className="flex items-start gap-3 px-4 py-1">
-          <span className="text-xs font-mono text-text-tertiary w-12 shrink-0">
-            {timeLabel}
+        <div className="mx-4 my-1 px-3 py-1.5 rounded bg-accent/10 border border-accent/20">
+          <span className="text-accent text-sm font-medium">
+            ▶ {phase}
+            {attempt && attempt > 1 ? ` (attempt ${attempt})` : ""}
           </span>
-          <div className="text-accent text-sm">▶ {phase} started</div>
         </div>
       );
     }
 
     case "phase_end": {
-      const phase = (data.phase as string) || "";
-      const status = (data.status as string) || "";
-      const duration = data.duration as number | undefined;
-      const statusSymbol = status === "completed" ? "✓" : "✗";
-      const statusText =
-        status === "completed"
-          ? duration !== undefined
-            ? `completed (${(duration / 1000).toFixed(1)}s)`
-            : "completed"
-          : "failed";
+      const phase = ((data.phase as string) || "").toUpperCase();
+      const success = data.success !== false;
+      const durationMs = data.durationMs as number | undefined;
+      const duration =
+        durationMs !== undefined ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
 
       return (
-        <div className="flex items-start gap-3 px-4 py-1">
-          <span className="text-xs font-mono text-text-tertiary w-12 shrink-0">
-            {timeLabel}
+        <div
+          className={`mx-4 my-1 px-3 py-1.5 rounded border ${
+            success
+              ? "bg-status-completed/10 border-status-completed/20"
+              : "bg-status-failed/10 border-status-failed/20"
+          }`}
+        >
+          <span
+            className={`text-sm font-medium ${success ? "text-status-completed" : "text-status-failed"}`}
+          >
+            {success ? "✓" : "✗"} {phase}
+            {duration}
           </span>
-          <div className="text-accent text-sm">
-            {statusSymbol} {phase} {statusText}
-          </div>
         </div>
       );
     }
 
     default:
-      // Default case - show basic representation of the event
-      return (
-        <div className="flex items-start gap-3 px-4 py-1">
-          <span className="text-xs font-mono text-text-tertiary w-12 shrink-0">
-            {timeLabel}
-          </span>
-          <div className="text-sm text-text-secondary">
-            [{type}] {JSON.stringify(data)}
-          </div>
-        </div>
-      );
+      return null;
   }
-};
-
-// Helper function to format tokens
-const formatTokens = (num: number): string => {
-  if (num >= 1000000) {
-    return `${(num / 1000000).toFixed(1)}M`;
-  }
-  if (num >= 1000) {
-    return `${(num / 1000).toFixed(1)}K`;
-  }
-  return num.toString();
 };
 
 export { StreamEventComponent };

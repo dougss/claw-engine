@@ -50,8 +50,11 @@ export const useKpis = (
         kpiData.running++;
       }
 
+      // startedAt/completedAt may be null — fall back to createdAt
       const occurredToday =
-        isSameDay(task.startedAt, today) || isSameDay(task.completedAt, today);
+        isSameDay(task.startedAt, today) ||
+        isSameDay(task.completedAt, today) ||
+        isSameDay(task.createdAt, today);
 
       if (occurredToday) {
         if (task.status === "completed") kpiData.completedToday++;

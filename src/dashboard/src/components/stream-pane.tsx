@@ -80,8 +80,8 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
       <div className="px-4 py-3 border-b border-border flex items-center justify-between">
         {task ? (
           <>
-            <div className="flex items-center gap-3 min-w-0">
-              <h2 className="text-text-primary font-medium truncate">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <h2 className="text-text-primary text-sm font-medium truncate min-w-0 flex-1">
                 {task.description}
               </h2>
               <span
