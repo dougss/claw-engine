@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { fetchTaskWithTelemetry, type TelemetryEntry } from '../lib/api';
+import { useState, useEffect, useRef } from "react";
+import { fetchTaskWithTelemetry, type TelemetryEntry } from "../lib/api";
 
 export interface StreamEvent {
   id: string;
@@ -13,7 +13,10 @@ interface UseStreamResult {
   isLive: boolean;
 }
 
-export const useStream = (taskId: string | null, taskStatus: string): UseStreamResult => {
+export const useStream = (
+  taskId: string | null,
+  taskStatus: string,
+): UseStreamResult => {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [isLive, setIsLive] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -24,7 +27,7 @@ export const useStream = (taskId: string | null, taskStatus: string): UseStreamR
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-    
+
     setEvents([]);
     setIsLive(false);
 
@@ -32,32 +35,59 @@ export const useStream = (taskId: string | null, taskStatus: string): UseStreamR
       return;
     }
 
-    if (taskStatus === 'running') {
+    if (taskStatus === "running") {
       // Connect to SSE stream
       const url = `/api/v1/tasks/${taskId}/stream`;
-      
+
       try {
         const es = new EventSource(url);
         eventSourceRef.current = es;
         setIsLive(true);
 
-        es.onmessage = (event) => {
+        // Server sends named events (event: <type>), not unnamed messages.
+        // Must use addEventListener for each type.
+        const EVENT_TYPES = [
+          "session_start",
+          "session_end",
+          "session_resume",
+          "text_delta",
+          "tool_use",
+          "tool_result",
+          "token_update",
+          "checkpoint",
+          "compaction",
+          "api_retry",
+          "model_fallback",
+          "permission_denied",
+          "validation_result",
+          "phase_start",
+          "phase_end",
+          "routing_decision",
+          "error",
+          "heartbeat",
+        ] as const;
+
+        const handleNamedEvent = (ev: MessageEvent) => {
           try {
-            const parsedData = JSON.parse(event.data);
-            
-            // Normalize the SSE event to StreamEvent shape
+            const data = JSON.parse(ev.data) as Record<string, unknown>;
             const streamEvent: StreamEvent = {
-              id: parsedData.id || Date.now().toString(),
-              type: parsedData.type,
-              timestamp: parsedData.timestamp || Date.now(),
-              data: parsedData.data || {}
+              id: String(data.id ?? Date.now()),
+              type: ev.type,
+              timestamp:
+                typeof data.timestamp === "number"
+                  ? data.timestamp
+                  : Date.now(),
+              data: (data.data as Record<string, unknown>) ?? data,
             };
-            
-            setEvents(prev => [...prev, streamEvent]);
+            setEvents((prev) => [...prev, streamEvent]);
           } catch (error) {
-            console.error('Error parsing SSE event:', error);
+            console.error("Error parsing SSE event:", error);
           }
         };
+
+        for (const type of EVENT_TYPES) {
+          es.addEventListener(type, handleNamedEvent as EventListener);
+        }
 
         es.onerror = () => {
           setIsLive(false);
@@ -65,28 +95,30 @@ export const useStream = (taskId: string | null, taskStatus: string): UseStreamR
           eventSourceRef.current = null;
         };
       } catch (error) {
-        console.error('Error connecting to SSE:', error);
+        console.error("Error connecting to SSE:", error);
         setIsLive(false);
       }
-    } else if (taskStatus === 'completed' || taskStatus === 'failed') {
+    } else if (taskStatus === "completed" || taskStatus === "failed") {
       // Fetch historical data
       const fetchData = async () => {
         try {
           const taskDetail = await fetchTaskWithTelemetry(taskId);
-          
+
           if (taskDetail && taskDetail.telemetry) {
             // Convert telemetry array to StreamEvent format
-            const historicalEvents: StreamEvent[] = taskDetail.telemetry.map((telemetryEntry: TelemetryEntry, index: number) => ({
-              id: telemetryEntry.id || `historical-${index}`,
-              type: telemetryEntry.eventType || 'unknown',
-              timestamp: new Date(telemetryEntry.createdAt).getTime(),
-              data: telemetryEntry.data as Record<string, unknown> || {}
-            }));
-            
+            const historicalEvents: StreamEvent[] = taskDetail.telemetry.map(
+              (telemetryEntry: TelemetryEntry, index: number) => ({
+                id: telemetryEntry.id || `historical-${index}`,
+                type: telemetryEntry.eventType || "unknown",
+                timestamp: new Date(telemetryEntry.createdAt).getTime(),
+                data: (telemetryEntry.data as Record<string, unknown>) || {},
+              }),
+            );
+
             setEvents(historicalEvents);
           }
         } catch (error) {
-          console.error('Error fetching historical data:', error);
+          console.error("Error fetching historical data:", error);
         }
       };
 

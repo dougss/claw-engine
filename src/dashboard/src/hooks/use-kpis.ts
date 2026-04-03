@@ -1,14 +1,5 @@
-import { useMemo } from 'react';
-
-// Define the Task type based on the expected structure
-interface Task {
-  id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  startedAt?: string;
-  completedAt?: string;
-  tokensUsed?: number;
-  cost?: number;
-}
+import { useMemo } from "react";
+import type { Task } from "../lib/api";
 
 interface KpiData {
   running: number;
@@ -18,29 +9,31 @@ interface KpiData {
   costToday: number;
 }
 
-const isSameDay = (date1: Date | undefined, date2: Date = new Date()): boolean => {
-  if (!date1) return false;
+const isSameDay = (dateStr: string | null, today: Date): boolean => {
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
   return (
-    date1.getDate() === date2.getDate() &&
-    date1.getMonth() === date2.getMonth() &&
-    date1.getFullYear() === date2.getFullYear()
+    d.getDate() === today.getDate() &&
+    d.getMonth() === today.getMonth() &&
+    d.getFullYear() === today.getFullYear()
   );
 };
 
 export const formatTokens = (n: number): string => {
-  if (n >= 1000000) {
-    return (n / 1000000).toFixed(1) + 'M';
-  } else if (n >= 1000) {
-    return (n / 1000).toFixed(1) + 'K';
-  }
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "K";
   return n.toString();
 };
 
-export const formatCost = (n: number): string => {
-  return `$${n.toFixed(2)}`;
-};
+export const formatCost = (n: number): string => `$${n.toFixed(2)}`;
 
-export const useKpis = (tasks: Task[]): { kpis: KpiData; formatTokens: (n: number) => string; formatCost: (n: number) => string } => {
+export const useKpis = (
+  tasks: Task[],
+): {
+  kpis: KpiData;
+  formatTokens: (n: number) => string;
+  formatCost: (n: number) => string;
+} => {
   const kpis = useMemo(() => {
     const kpiData: KpiData = {
       running: 0,
@@ -52,35 +45,22 @@ export const useKpis = (tasks: Task[]): { kpis: KpiData; formatTokens: (n: numbe
 
     const today = new Date();
 
-    tasks.forEach(task => {
-      // Count running tasks
-      if (task.status === 'running') {
+    for (const task of tasks) {
+      if (task.status === "running") {
         kpiData.running++;
       }
 
-      // Determine if task occurred today
-      const startDate = task.startedAt ? new Date(task.startedAt) : undefined;
-      const completionDate = task.completedAt ? new Date(task.completedAt) : undefined;
-      
-      const occurredToday = isSameDay(startDate, today) || isSameDay(completionDate, today);
+      const occurredToday =
+        isSameDay(task.startedAt, today) || isSameDay(task.completedAt, today);
 
       if (occurredToday) {
-        // Count completed/failed today
-        if (task.status === 'completed') {
-          kpiData.completedToday++;
-        } else if (task.status === 'failed') {
-          kpiData.failedToday++;
-        }
+        if (task.status === "completed") kpiData.completedToday++;
+        else if (task.status === "failed") kpiData.failedToday++;
 
-        // Sum tokens and costs for today
-        if (task.tokensUsed) {
-          kpiData.tokensToday += task.tokensUsed;
-        }
-        if (task.cost) {
-          kpiData.costToday += task.cost;
-        }
+        if (task.tokensUsed) kpiData.tokensToday += task.tokensUsed;
+        if (task.costUsd) kpiData.costToday += parseFloat(task.costUsd);
       }
-    });
+    }
 
     return kpiData;
   }, [tasks]);

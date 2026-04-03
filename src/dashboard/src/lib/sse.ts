@@ -36,15 +36,48 @@ export function createSseClient(onEvent: EventHandler): () => void {
 
     es = new EventSource(url);
 
-    es.onmessage = (ev) => {
+    // Server sends named events (event: <type>), not unnamed messages.
+    // onmessage only fires for unnamed events, so we must addEventListener
+    // for each known type.
+    const EVENT_TYPES: SseEventType[] = [
+      "session_start",
+      "session_end",
+      "session_resume",
+      "text_delta",
+      "tool_use",
+      "tool_result",
+      "token_update",
+      "checkpoint",
+      "compaction",
+      "api_retry",
+      "model_fallback",
+      "permission_denied",
+      "validation_result",
+      "phase_start",
+      "phase_end",
+      "routing_decision",
+      "error",
+      "ping",
+    ];
+
+    const handleNamedEvent = (ev: MessageEvent) => {
       try {
-        const parsed = JSON.parse(ev.data as string) as SseEvent;
+        const data = JSON.parse(ev.data as string) as Record<string, unknown>;
+        const parsed: SseEvent = {
+          id: Number(data.id ?? 0),
+          type: ev.type as SseEventType,
+          data,
+        };
         lastEventId = String(parsed.id);
         onEvent(parsed);
       } catch {
         // ignore malformed
       }
     };
+
+    for (const type of EVENT_TYPES) {
+      es.addEventListener(type, handleNamedEvent as EventListener);
+    }
 
     es.onerror = () => {
       es?.close();

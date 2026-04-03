@@ -46,6 +46,8 @@ export interface Task {
   tokensUsed: number;
   costUsd: string;
   createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
   durationMs: number | null;
 }
 

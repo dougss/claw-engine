@@ -1,5 +1,5 @@
-import type { Task } from '../lib/api';
-import { TaskItem } from './task-item';
+import type { Task } from "../lib/api";
+import { TaskItem } from "./task-item";
 
 interface TaskListProps {
   tasks: Task[];
@@ -9,7 +9,7 @@ interface TaskListProps {
 
 export function TaskList({ tasks, selectedId, onSelect }: TaskListProps) {
   return (
-    <div className="w-80 h-full overflow-y-auto border-r border-border bg-surface flex flex-col">
+    <div className="w-80 shrink-0 h-full overflow-y-auto border-r border-border bg-surface flex flex-col">
       <div className="p-3 border-b border-border">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-text-primary">Tasks</h2>
