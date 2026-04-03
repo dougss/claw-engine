@@ -4,19 +4,29 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 15
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - javascript
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: npm
     directory: /src/dashboard
     schedule:
       interval: weekly
-    open-pull-requests-limit: 15
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - dashboard
+    groups:
+      dashboard-minor-patch:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: /
@@ -25,3 +35,7 @@ updates:
     labels:
       - dependencies
       - github-actions
+    groups:
+      github-actions-all:
+        patterns:
+          - "*"
