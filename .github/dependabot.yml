@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 15
+    labels:
+      - dependencies
+      - javascript
+
+  - package-ecosystem: npm
+    directory: /src/dashboard
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 15
+    labels:
+      - dependencies
+      - dashboard
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - github-actions
