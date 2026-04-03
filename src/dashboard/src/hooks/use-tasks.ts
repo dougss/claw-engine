@@ -74,7 +74,7 @@ export function useTasks() {
     fetchTasks();
     const interval = setInterval(fetchTasks, 10_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchTasks]); // Include fetchTasks in dependency array to prevent stale closure
 
   const selectedTask = tasks.find((task) => task.id === selectedId) || null;
 

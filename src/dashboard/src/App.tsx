@@ -1,3 +1,4 @@
+// Main dashboard application component that manages and displays tasks, KPIs, and real-time stream data
 import { Header } from "./components/header";
 import { TaskList } from "./components/task-list";
 import { StreamPane } from "./components/stream-pane";
