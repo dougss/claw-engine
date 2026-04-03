@@ -35,13 +35,17 @@ export function registerRunCommand(program: import("commander").Command) {
   }
 
   function createClawBranch(repoPath: string, prompt: string): string {
-    const current = execSync(
-      `git -C "${repoPath}" rev-parse --abbrev-ref HEAD`,
-      { encoding: "utf-8" },
-    ).trim();
     const defaultBranch = getDefaultBranch(repoPath);
 
-    if (current !== defaultBranch) return current; // already on a feature branch
+    // Always create a fresh branch from the default branch
+    // First, ensure we have latest default branch
+    try {
+      execSync(`git -C "${repoPath}" fetch origin ${defaultBranch} --quiet`, {
+        stdio: "pipe",
+      });
+    } catch {
+      // offline or no remote — continue from local
+    }
 
     const slug = prompt
       .toLowerCase()
@@ -49,10 +53,23 @@ export function registerRunCommand(program: import("commander").Command) {
       .replace(/^-|-$/g, "")
       .slice(0, 40);
     const branch = `claw/${slug}-${Date.now().toString(36)}`;
-    execSync(`git -C "${repoPath}" checkout -b "${branch}"`, {
-      stdio: "inherit",
-    });
-    console.log(`[git] created branch ${branch}`);
+
+    // Create branch from origin/default (or local default if no remote)
+    try {
+      execSync(
+        `git -C "${repoPath}" checkout -b "${branch}" "origin/${defaultBranch}"`,
+        { stdio: "pipe" },
+      );
+    } catch {
+      // Fallback: create from local default branch
+      execSync(
+        `git -C "${repoPath}" checkout -b "${branch}" "${defaultBranch}"`,
+        {
+          stdio: "pipe",
+        },
+      );
+    }
+    console.log(`[git] created branch ${branch} from ${defaultBranch}`);
     return branch;
   }
 
@@ -180,10 +197,11 @@ export function registerRunCommand(program: import("commander").Command) {
 
         // LLM-based classification — fast Qwen call (~50 tokens, 8s timeout).
         // Falls back to "medium" on error so it never blocks execution.
-        let classificationResult: import("../../core/classifier.js").ClassificationResult = { 
-          complexity: "medium", 
-          title: prompt.slice(0, 60) // fallback title
-        };
+        let classificationResult: import("../../core/classifier.js").ClassificationResult =
+          {
+            complexity: "medium",
+            title: prompt.slice(0, 60), // fallback title
+          };
         if (!opts.delegate) {
           const apiKey =
             process.env[config.providers.alibaba.api_key_env] ?? "";
@@ -468,18 +486,30 @@ export function registerRunCommand(program: import("commander").Command) {
                 }
                 if (event.reason === "completed") {
                   console.log("\n✅ done");
-                  const committed = autoCommit(
-                    repoPath,
-                    prompt,
-                    !!opts.noCommit,
-                  );
-                  if (committed && clawBranch && clawBranch !== defaultBranch) {
-                    pushAndCreatePr(
-                      repoPath,
-                      clawBranch,
-                      prompt,
-                      defaultBranch,
-                    );
+                  // Commit any remaining unstaged changes (delegate may have already committed)
+                  autoCommit(repoPath, prompt, !!opts.noCommit);
+
+                  // Check if the branch has commits ahead of default — push + PR
+                  if (clawBranch && clawBranch !== defaultBranch) {
+                    const hasCommits = (() => {
+                      try {
+                        const count = execSync(
+                          `git -C "${repoPath}" rev-list --count "origin/${defaultBranch}..HEAD"`,
+                          { encoding: "utf-8" },
+                        ).trim();
+                        return parseInt(count, 10) > 0;
+                      } catch {
+                        return true; // assume there are commits if check fails
+                      }
+                    })();
+                    if (hasCommits) {
+                      pushAndCreatePr(
+                        repoPath,
+                        clawBranch,
+                        prompt,
+                        defaultBranch,
+                      );
+                    }
                   } else if (isGithubRepo) {
                     execSync(`git -C "${repoPath}" push origin HEAD`, {
                       stdio: "inherit",
