@@ -2,6 +2,8 @@ import { Queue, Worker, type ConnectionOptions } from "bullmq";
 import type { WorkItemDAG } from "./dag-schema.js";
 
 export interface TaskJobData {
+  /** Real DB task UUID — used by the daemon to call updateTaskStatus, insertTelemetryEvent etc. */
+  taskId: string;
   dagNodeId: string;
   repo: string;
   branch: string;
@@ -54,7 +56,8 @@ export async function createScheduler(
   const workers = new Map<string, Worker<TaskJobData>>();
 
   for (const provider of providerNames) {
-    const queueName = `claw-${provider}-${queueSuffix}`;
+    // Global queue names — must match the daemon workers in daemon.ts
+    const queueName = `claw:${provider}`;
     const limiter = rateLimits[provider];
     const queue = new Queue<TaskJobData>(queueName, {
       connection: redis,
@@ -142,6 +145,10 @@ export async function createScheduler(
           task.complexity === "complex" ? "anthropic" : "alibaba";
 
         const jobData: TaskJobData = {
+          // taskId is the real DB UUID — callers that go through enqueueDAG must
+          // override this after DB task creation, or use Queue.add() directly (as
+          // submit.ts does). Set to dagNodeId as a fallback so the field is never empty.
+          taskId: task.id,
           dagNodeId: task.id,
           repo: task.repo,
           branch: task.branch,
