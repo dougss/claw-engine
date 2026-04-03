@@ -5,6 +5,7 @@ export type HarnessEvent =
   | { type: "tool_result"; id: string; output: string; isError: boolean }
   | { type: "permission_denied"; tool: string; reason: string }
   | { type: "token_update"; used: number; budget: number; percent: number }
+  | { type: "heartbeat"; timestamp: number }
   | { type: "checkpoint"; reason: "token_limit" | "stall" | "manual" }
   | {
       type: "compaction";

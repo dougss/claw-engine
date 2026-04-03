@@ -164,11 +164,56 @@ export async function* runOpencodePipe(
   let encounteredError = false;
   let errorMessage = "";
 
+  // Queue-based stream reading so heartbeat events can be interleaved even
+  // when stdout is silent during long tool operations (e.g. large file edits).
+  type StreamItem =
+    | { kind: "chunk"; data: Buffer }
+    | { kind: "heartbeat"; timestamp: number }
+    | { kind: "end" };
+
+  const streamQueue: StreamItem[] = [];
+  let streamWaiter: (() => void) | null = null;
+
+  function enqueueItem(item: StreamItem): void {
+    streamQueue.push(item);
+    if (streamWaiter) {
+      const w = streamWaiter;
+      streamWaiter = null;
+      w();
+    }
+  }
+
+  proc.stdout!.on("data", (data: Buffer) =>
+    enqueueItem({ kind: "chunk", data }),
+  );
+  proc.stdout!.on("end", () => enqueueItem({ kind: "end" }));
+  proc.stdout!.on("error", () => enqueueItem({ kind: "end" }));
+
+  const heartbeatInterval = setInterval(
+    () => enqueueItem({ kind: "heartbeat", timestamp: Date.now() }),
+    30_000,
+  );
+
   try {
     let buffer = "";
 
-    for await (const raw of proc.stdout!) {
-      buffer += (raw as Buffer).toString("utf8");
+    while (true) {
+      if (streamQueue.length === 0) {
+        await new Promise<void>((resolve) => {
+          streamWaiter = resolve;
+        });
+      }
+      const item = streamQueue.shift()!;
+
+      if (item.kind === "end") break;
+
+      if (item.kind === "heartbeat") {
+        yield { type: "heartbeat", timestamp: item.timestamp };
+        continue;
+      }
+
+      // item.kind === "chunk"
+      buffer += item.data.toString("utf8");
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
@@ -198,7 +243,20 @@ export async function* runOpencodePipe(
       }
     }
 
-    const exitCode = await exitPromise;
+    const exitCode = await Promise.race([
+      exitPromise,
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                "opencode process did not exit within 60s after stdout closed",
+              ),
+            ),
+          60_000,
+        ),
+      ),
+    ]);
 
     if (encounteredError) {
       throw new Error(`opencode error: ${errorMessage}`);
@@ -223,6 +281,7 @@ export async function* runOpencodePipe(
     yield { type: "session_end", reason: "completed" };
   } finally {
     clearTimeout(timer);
+    clearInterval(heartbeatInterval);
     if (!proc.killed) proc.kill("SIGTERM");
   }
 }
