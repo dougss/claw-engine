@@ -1,20 +1,22 @@
 # Claw Engine
 
-Model-agnostic coding agent factory. Recebe uma descrição de feature, cria um grafo de dependências (DAG) de tarefas, roteia cada tarefa para o modelo mais adequado (Alibaba/Qwen em Engine Mode ou Claude em Delegate Mode), executa em git worktrees isolados e abre PRs automaticamente.
+Model-agnostic coding agent factory. Recebe uma descrição de feature, opcionalmente decompõe em DAG de tarefas, **classifica complexidade com um LLM leve (Qwen via Bailian)** e **roteia para o delegate certo**: na prática **OpenCode** (`opencode run --format json`) para trabalho cotidiano e **Claude** (`claude -p`) para tarefas complexas ou fases de planejamento/revisão. Execução é **100% delegate** (subprocessos com ferramentas próprias de cada runtime); não há mais modo “engine” com adapter Alibaba + tools do harness no caminho principal.
+
+Há um **pipeline opcional em cinco fases** (plan → execute → validate → review → PR): PLAN e REVIEW com Claude (+ MCP opcional), EXECUTE com **OpenCode**, validação com os comandos do projeto e abertura de PR via `gh` / GitHub App.
 
 ---
 
 ## Índice
 
 - [Arquitetura](#arquitetura)
-- [Modos de execução](#modos-de-execução)
+- [Modelo de execução](#modelo-de-execução)
+- [Pipeline em fases](#pipeline-em-fases)
 - [Instalação e setup](#instalação-e-setup)
 - [CLI](#cli)
-- [Roteamento de modelos](#roteamento-de-modelos)
+- [Classificação e roteamento](#classificação-e-roteamento)
 - [Ciclo de vida de uma tarefa](#ciclo-de-vida-de-uma-tarefa)
-- [Agent Loop](#agent-loop)
+- [Eventos (HarnessEvent)](#eventos-harnessevent)
 - [Checkpointing](#checkpointing)
-- [Permissões de ferramentas](#permissões-de-ferramentas)
 - [Validação](#validação)
 - [Dashboard](#dashboard)
 - [API REST](#api-rest)
@@ -24,37 +26,60 @@ Model-agnostic coding agent factory. Recebe uma descrição de feature, cria um 
 - [Banco de dados](#banco-de-dados)
 - [Daemon](#daemon)
 - [Testes](#testes)
+- [Estrutura de diretórios](#estrutura-de-diretórios)
 
 ---
 
 ## Arquitetura
 
+### Visão macro (work items + DAG)
+
+Fluxo típico de `claw submit` / filas: decomposição em grafo, fila BullMQ, classificação por task, delegate e pós-processamento.
+
 ```
 ┌──────────────┐   submit    ┌─────────────┐   DAG    ┌───────────────┐
-│  CLI / API   │────────────▶│  Decomposer │─────────▶│   Scheduler   │
+│  CLI / API   │────────────▶│ Decomposer  │─────────▶│  Scheduler    │
 └──────────────┘             └─────────────┘          │  (BullMQ)     │
                                                        └───────┬───────┘
-                                                               │ enqueue
+                                                               │
+                                                     ┌─────────▼──────────┐
+                                                     │  classifyTask()    │
+                                                     │  (Qwen, ~50 tok)   │
+                                                     └─────────┬──────────┘
+                                                               │
                                                      ┌─────────▼──────────┐
                                                      │      Router        │
-                                                     │  (3-layer logic)   │
+                                                     │  chain + complex?  │
                                                      └─────────┬──────────┘
                                               ┌────────────────┴────────────────┐
                                               │                                 │
                                      ┌────────▼─────────┐           ┌──────────▼──────────┐
-                                     │  Engine Mode      │           │  Delegate Mode       │
-                                     │  Alibaba/Qwen     │           │  claude -p           │
-                                     │  Harness tools    │           │  Claude's own tools  │
+                                     │  OpenCode        │           │  Claude -p          │
+                                     │  opencode run    │           │  stream-json        │
+                                     │  simple / medium │           │  complex / fallback │
                                      └────────┬─────────┘           └──────────┬──────────┘
                                               └────────────┬────────────────────┘
                                                            │
                                                   ┌────────▼────────┐
-                                                  │   Agent Loop    │
-                                                  │  git worktree   │
+                                                  │  git / worktree │
                                                   │  validação      │
-                                                  │  PR automático  │
-                                                  └─────────────────┘
+                                                  │  PR (opcional)  │
+                                                  └────────┬────────┘
+                                                           │
+                              ┌────────────────────────────┼────────────────────────────┐
+                              │                            │                            │
+                     ┌────────▼────────┐        ┌──────────▼──────────┐        ┌──────────▼──────────┐
+                     │   PostgreSQL    │        │ Redis + SSE buffer  │        │ Dashboard (React)   │
+                     │ work items,     │        │ pub/sub, eventos    │        │ /pipeline, /dag,    │
+                     │ telemetria      │        │ em tempo real       │        │ métricas, logs      │
+                     └─────────────────┘        └─────────────────────┘        └─────────────────────┘
 ```
+
+`claw run` (task única) segue o mesmo núcleo **classify → router → OpenCode | Claude** e registra no DB quando possível, mas não passa pelo Decomposer.
+
+### Pipeline opcional (`--pipeline`)
+
+Ativado por `claw run … --pipeline`. O diagrama linear feliz e o **diagrama detalhado com loops** estão na seção [Pipeline em fases](#pipeline-em-fases).
 
 **Stack:**
 
@@ -62,27 +87,169 @@ Model-agnostic coding agent factory. Recebe uma descrição de feature, cria um 
 - BullMQ + Redis (filas por provider)
 - PostgreSQL + Drizzle ORM (pgvector/pg16)
 - React 19 + Vite + Tailwind v4 + @xyflow/react + Recharts (dashboard)
+- **OpenCode** CLI no PATH + **Claude Code** CLI para delegate Anthropic
 - Porta: **3004**
 
 ---
 
-## Modos de execução
+## Modelo de execução
 
-### Engine Mode (Alibaba/Qwen)
+### Delegate only
 
-- Adapter OpenAI-compatible via DashScope API
-- Tools gerenciadas pelo harness: `bash`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `ask_user`
-- Concorrência: 3 sessões paralelas
-- Custo: baixo (~gratuito com tier DashScope)
-- Ideal para: tasks simples, boilerplate, CRUD, renomeações
+Todo trabalho de agente passa por subprocessos:
 
-### Delegate Mode (Anthropic/Claude)
+| Provider     | Quando                         | Como |
+| ------------ | ------------------------------ | ---- |
+| **OpenCode** | Tarefas `simple` ou `medium` (padrão) | `opencode run … --format json` — stream JSONL mapeado para `HarnessEvent` |
+| **Anthropic**| Tarefas `complex` ou fallback na cadeia | `claude -p --output-format stream-json` |
 
-- Subprocess `claude -p --output-format stream-json --verbose`
-- Claude Code usa suas próprias ferramentas (total autonomia)
-- Concorrência: 1 sessão paralela (caro)
-- Custo: $3/$15 por 1M tokens (input/output)
-- Ideal para: tasks complexas, refactor, debug, arquitetura
+OpenCode e Claude usam **suas próprias ferramentas** (leitura, edição, bash, MCP, etc.). O Claw Engine orquestra, persiste telemetria e expõe SSE no dashboard.
+
+### Classificação (Bailian / DashScope)
+
+`classifyTask()` chama a API compatível com chat completions (`config.providers.alibaba.base_url`, modelo em `models.default`) com prompt fixo e timeout curto (~8s). Saída: `simple` | `medium` | `complex`. Em falha de rede ou API, usa `medium` para não bloquear.
+
+### API Alibaba
+
+A chave e a URL vêm de `config.yaml` (`BAILIAN_SP_API_KEY` e endpoint **coding-intl** no setup atual). OpenCode costuma usar modelos no formato `dashscope/...` conforme `providers.opencode.default_model`.
+
+---
+
+## Pipeline em fases
+
+Com `claw run … --pipeline`, `runPipeline()` em `src/core/pipeline.ts` orquestra fases com eventos `phase_start` / `phase_end` e `validation_result` (dashboard **Pipeline**).
+
+### Diagrama linear (visão feliz)
+
+Caminho sem falhas de validação nem `REQUEST_CHANGES` no review:
+
+```mermaid
+flowchart LR
+  U["Prompt + repo"] --> P["① PLAN — Claude + MCP"]
+  P --> E["② EXECUTE — OpenCode"]
+  E --> V["③ VALIDATE"]
+  V --> R["④ REVIEW — Claude"]
+  R --> G["⑤ PR — git + gh"]
+```
+
+### Diagrama completo (loops reais)
+
+Inclui **retry EXECUTE ↔ VALIDATE** quando os testes falham (até `validation.max_retries + 1` tentativas) e **loop de review**: se o veredito for `REQUEST_CHANGES`, volta **EXECUTE → VALIDATE** antes de nova **REVIEW**. Só então, com `--pr`, vem commit/push e `gh pr create` (GitHub App opcional para auth do bot).
+
+```mermaid
+flowchart TB
+  START([claw run --pipeline])
+  FAIL([Pipeline encerra com falha])
+
+  PLAN["PLAN — claude -p + MCP Nexus opcional<br/>saída: plano em texto"]
+
+  subgraph loop_val[Loop EXECUTE ↔ VALIDATE]
+    direction TB
+    EXEC["EXECUTE — opencode<br/>task + plan + previousError opcional"]
+    VAL["VALIDATE — tsc / lint / test"]
+    EXEC --> VAL
+    VAL -->|"falha, ainda há retry"| EXEC
+  end
+
+  subgraph loop_rev[Loop REVIEW]
+    direction TB
+    REV["REVIEW — claude -p no git diff"]
+    FIX["EXECUTE de novo + VALIDATE<br/>com feedback do review"]
+    REV -->|"REQUEST_CHANGES"| FIX
+    FIX --> REV
+  end
+
+  GIT["Commit + push — se --pr"]
+  PRN["PR — gh pr create"]
+  ENDN([Concluído])
+
+  START --> PLAN --> EXEC
+  VAL -->|"passou"| REV
+  VAL -->|"esgotou retries"| FAIL
+  REV -->|"APPROVE ou max tentativas"| GIT
+  GIT --> PRN --> ENDN
+```
+
+### Diagrama de sequência (Mermaid)
+
+Substitui o swimlane ASCII: mesmos atores (**Claw Engine**, **Claude** em PLAN e REVIEW, **OpenCode**, **Validador** shell, **Git/gh**). O primeiro diagrama inclui `loop` / `alt` / `opt` alinhados a `runPipeline()`; o segundo é só o **fluxo feliz**.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as Usuário
+  participant E as "Claw Engine"
+  participant PL as "Claude PLAN"
+  participant OC as OpenCode
+  participant V as "Validador shell"
+  participant RV as "Claude REVIEW"
+  participant GH as "Git gh"
+
+  U->>E: claw run --pipeline [--pr]
+  E->>PL: runClaudePipe PLAN + MCP opcional
+  PL-->>E: plano texto
+
+  loop Retries de validação até passar ou esgotar maxRetries+1
+    E->>OC: runOpencodePipe EXECUTE task+plan + previousError
+    OC-->>E: session_end
+    E->>V: runValidation tsc lint test
+    V-->>E: passou ou saídas dos steps
+  end
+
+  alt validação nunca passou
+    E-->>U: pipeline falhou
+  else validação passou
+    loop Ciclo de review até APPROVE ou maxReviewRetries
+      E->>RV: runClaudePipe REVIEW git diff
+      RV-->>E: review + veredito
+      opt REQUEST_CHANGES
+        E->>OC: EXECUTE com feedback do review
+        OC-->>E: session_end
+        E->>V: VALIDATE
+        V-->>E: passou ou falhou
+        Note over E: Se validate falhar aqui: aborta com falha.
+      end
+    end
+    E->>GH: commit push gh pr create se --pr
+    GH-->>U: URL do PR
+  end
+```
+
+**Fluxo feliz (sem ramos de retry):**
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as Usuário
+  participant E as "Claw Engine"
+  participant PL as "Claude PLAN"
+  participant OC as OpenCode
+  participant V as "Validador shell"
+  participant RV as "Claude REVIEW"
+  participant GH as "Git gh"
+
+  U->>E: claw run --pipeline --pr
+  E->>PL: PLAN
+  PL-->>E: plano
+  E->>OC: EXECUTE
+  OC-->>E: ok
+  E->>V: VALIDATE
+  V-->>E: passou
+  E->>RV: REVIEW diff
+  RV-->>E: APPROVE
+  E->>GH: commit push PR
+  GH-->>U: URL do PR
+```
+
+### Resumo das fases
+
+| # | Fase | Runtime | Entrada principal |
+|---|------|---------|-------------------|
+| 1 | **PLAN** | `claude -p` + MCP opcional (`config/mcp.json`) | Prompt do usuário; system pede Nexus (`nexus_list` / `nexus_get`) e **só** o plano em texto |
+| 2 | **EXECUTE** | `opencode run` | Task + plano colados; se validação ou review falhou, inclui `previousError` |
+| 3 | **VALIDATE** | comandos do `validation` no YAML | Worktree do repo |
+| 4 | **REVIEW** | `claude -p` | Diff (`git diff HEAD~1` por padrão) + prompt original |
+| 5 | **PR** | `git` + `gh` (com `--pr`) | Branch nova se necessário, push, `gh pr create --body` com texto do review; **GitHub App** opcional (`CLAW_GITHUB_*`) |
 
 ---
 
@@ -91,15 +258,17 @@ Model-agnostic coding agent factory. Recebe uma descrição de feature, cria um 
 ### Pré-requisitos
 
 ```bash
-# Docker rodando (postgres + redis)
 docker ps | grep postgres
 docker ps | grep redis
 
-# Claude CLI instalado e autenticado
+# Claude CLI (delegate Anthropic)
 claude --version
 
-# DASHSCOPE_API_KEY (para Engine Mode com Alibaba)
-echo $DASHSCOPE_API_KEY
+# OpenCode no PATH
+which opencode
+
+# Classificação + provider DashScope no OpenCode
+echo $BAILIAN_SP_API_KEY
 ```
 
 ### Instalar
@@ -107,25 +276,20 @@ echo $DASHSCOPE_API_KEY
 ```bash
 cd ~/server/apps/claw-engine
 npm install
-
-# Instalar claw globalmente
 npm link
 
-# Verificar
-which claw      # → /opt/homebrew/bin/claw
-claw --version  # → 0.1.0
+which claw
+claw --version
 ```
 
 ### Banco de dados
 
 ```bash
-# Criar DB e usuário (se não existir)
 docker exec postgres psql -U admin -d postgres -c "
   CREATE ROLE claw_engine WITH LOGIN PASSWORD 'claw_engine_local' CREATEDB;
   CREATE DATABASE claw_engine OWNER claw_engine;
 "
 
-# Rodar migrations
 cd ~/server/apps/claw-engine
 npx drizzle-kit migrate
 ```
@@ -133,26 +297,21 @@ npx drizzle-kit migrate
 ### Variáveis de ambiente
 
 ```bash
-# Opcional — sem isso o CLI usa "claw_engine_local" como senha padrão
 export CLAW_ENGINE_DB_PASS=claw_engine_local
-
-# Para Engine Mode
-export DASHSCOPE_API_KEY=sk-...
-
-# Para override completo da connection string
+export BAILIAN_SP_API_KEY=sk-...
 export CLAW_ENGINE_DATABASE_URL=postgresql://claw_engine:claw_engine_local@127.0.0.1:5432/claw_engine
+
+# Opcional: pipeline com PR atribuída ao bot
+# export CLAW_GITHUB_APP_ID=...
+# export CLAW_GITHUB_INSTALLATION_ID=...
+# export CLAW_GITHUB_PRIVATE_KEY_PATH=/absolute/path/to/app.pem
 ```
 
 ### Daemon (LaunchAgent)
 
 ```bash
-# Carregar (auto-start no boot)
 launchctl load ~/Library/LaunchAgents/dev.claw-engine.server.plist
-
-# Status
 launchctl list | grep claw-engine
-
-# Logs
 tail -f ~/server/logs/claw-engine.log
 ```
 
@@ -160,218 +319,55 @@ tail -f ~/server/logs/claw-engine.log
 
 ## CLI
 
-O binário `claw` é instalado globalmente e funciona a partir de qualquer diretório.
-
 ### `claw doctor`
 
-Verifica o ambiente antes de usar.
+Config, Postgres, Redis, binário `claude`, espaço em disco.
 
 ```bash
 claw doctor
 ```
 
-Checagens realizadas:
-
-| Check         | Método             | Falha se              |
-| ------------- | ------------------ | --------------------- |
-| Config        | loadConfig() / Zod | YAML inválido         |
-| Database      | SELECT 1           | Postgres indisponível |
-| Redis         | PING               | Redis indisponível    |
-| Claude binary | `which claude`     | claude não no PATH    |
-| Disk space    | statfs("/")        | < 20 GB livres        |
-
 ---
 
 ### `claw run <repo> <prompt>`
 
-Executa uma tarefa diretamente em um repositório. Ideal para testar rapidamente.
+- **Repo** pode ser um caminho local ou `owner/repo` do GitHub (clone em `/tmp/claw-runs/…`).
+- **Classificação** automática + roteamento OpenCode vs Claude.
+- **`--delegate`** força Claude.
+- **`--pipeline`** ativa PLAN → EXECUTE (OpenCode) → VALIDATE → REVIEW → (PR se `--pr`).
+- **`--no-commit`** evita commit automático após run simples (pipeline com `--pr` gerencia git internamente).
 
 ```bash
-# Usar roteamento automático (router decide engine ou delegate)
-claw run . "refatorar o módulo de auth"
-
-# Forçar Delegate Mode (Claude CLI)
-claw run . "listar todos os arquivos de teste" --delegate
-
-# Forçar modelo específico
-claw run ~/server/apps/nexus "adicionar campo created_at" --delegate --model claude-opus-4-6
-
-# Dry-run (ver o que seria feito sem executar)
-claw run . "refatorar função X" --dry-run
-```
-
-O prompt é resolvido relativo ao diretório atual — funciona igual ao `claude code`.
-
-**Saída em tempo real:**
-
-- Texto do agente: stdout
-- Tool calls, tokens, status: stderr (não polui pipes)
-
----
-
-### `claw submit <description>`
-
-Submete um work item completo (pode ter múltiplas tasks em DAG) para a fila.
-
-```bash
-claw submit "implementar sistema de notificações com email e push"
-claw submit "refatorar módulo de pagamentos" --repos ~/server/apps/finno
-```
-
-O Decomposer usa LLM para quebrar a descrição em tasks com dependências.
-
----
-
-### `claw status [work-item-id]`
-
-```bash
-claw status                  # todos os work items
-claw status abc123           # work item específico
+claw run . "corrigir typo no README"
+claw run dougss/finno "adicionar campo created_at" --delegate
+claw run . "feature X" --pipeline
+claw run . "feature X" --pipeline --pr
+claw run . "teste" --dry-run
 ```
 
 ---
 
-### `claw sessions`
+### `claw submit`, `status`, `sessions`, `logs`, `costs`, `router-stats`, `cleanup`, `daemon`, `pause`, `resume`, `cancel`, `retry`, `approve`
 
-Lista sessões ativas (tasks em status running/starting/provisioning).
-
-```bash
-claw sessions
-```
+Comportamento geral igual à versão anterior (filas, DAG, work items). Estatísticas de roteamento refletem providers **opencode** vs **anthropic**.
 
 ---
 
-### `claw logs [task-id]`
+## Classificação e roteamento
 
-```bash
-claw logs                    # logs gerais do engine
-claw logs abc123             # logs de uma task específica
-claw logs --level debug      # filtrar por nível
-claw logs --search "error"   # buscar texto
-```
+1. **`fallbackChainPosition > 0`** — usa o tier correspondente da `fallback_chain` (escalonamento após falha).
+2. **`complexity === "complex"`** — preferência por tier **anthropic** na cadeia, se existir.
+3. **Caso contrário** — tier **opencode** na cadeia (`simple`/`medium`).
 
----
-
-### `claw costs [--days N]`
-
-```bash
-claw costs           # últimos 7 dias
-claw costs --days 30
-```
-
----
-
-### `claw router-stats`
-
-Estatísticas de roteamento: quantas tasks foram para engine vs delegate, motivos de decisão.
-
-```bash
-claw router-stats
-```
-
----
-
-### `claw cleanup [--dry-run]`
-
-Remove worktrees órfãos e telemetria antiga conforme política de retenção.
-
-```bash
-claw cleanup           # executar limpeza
-claw cleanup --dry-run # ver o que seria removido
-```
-
----
-
-### `claw daemon <action>`
-
-```bash
-claw daemon start    # iniciar via LaunchAgent
-claw daemon stop     # parar
-claw daemon status   # ver estado
-```
-
----
-
-### Controle de work items
-
-```bash
-claw pause <work-item-id>    # pausar execução
-claw resume <work-item-id>   # retomar
-claw cancel <work-item-id>   # cancelar
-claw retry <task-id>         # repetir task falha
-claw approve <work-item-id>  # aprovar review pendente
-```
-
----
-
-## Roteamento de modelos
-
-O router usa uma árvore de decisão de 3 camadas para enviar cada task para o modelo mais barato capaz de realizá-la.
-
-```
-RouteInput
-  ├── complexity: "simple" | "medium" | "complex"
-  ├── description: string
-  ├── fallbackChainPosition: number
-  └── claudeBudgetPercent: number
-         │
-         ▼
-┌────────────────────────────────┐
-│  1. Fallback chain position?   │ → se > 0, usar tier N da chain
-└────────────────────────────────┘
-         │ não
-         ▼
-┌────────────────────────────────┐
-│  2. Claude budget >= 85%?      │ → forçar Alibaba/Qwen
-└────────────────────────────────┘
-         │ não
-         ▼
-┌────────────────────────────────┐
-│  3a. complexity == "complex"?  │ → Delegate (Claude)
-│  3b. complexity == "simple"?   │ → Engine (Qwen)
-│  3c. medium: keyword score     │
-└────────────────────────────────┘
-         │
-         ▼
-    Keyword scoring
-    (positivo → Delegate, negativo → Engine)
-```
-
-### Sinais de complexidade (padrão)
-
-| Keyword           | Score | Efeito   |
-| ----------------- | ----- | -------- |
-| `cross-repo`      | +4    | Delegate |
-| `refactor`        | +3    | Delegate |
-| `debug`           | +3    | Delegate |
-| `architecture`    | +3    | Delegate |
-| `investigate`     | +2    | Delegate |
-| `migration`       | +2    | Delegate |
-| `security`        | +2    | Delegate |
-| `test`            | -1    | Engine   |
-| `crud`            | -2    | Engine   |
-| `rename`          | -2    | Engine   |
-| `add field`       | -2    | Engine   |
-| `create endpoint` | -1    | Engine   |
-| `boilerplate`     | -3    | Engine   |
-
-### Fallback chain (padrão)
+Cadeia típica em `config/config.yaml`:
 
 ```yaml
 models:
+  default: "qwen3-coder-plus"   # só classificação
   fallback_chain:
-    - model: qwen3.5-plus # tier 0: Engine (barato)
-      provider: alibaba
-      mode: engine
-    - model: deepseek-v3 # tier 1: Engine (fallback)
-      provider: alibaba
-      mode: engine
-    - model: claude-sonnet # tier 2: Delegate (premium)
-      provider: anthropic
-      mode: delegate
+    - { model: "opencode-default", provider: "opencode", mode: "delegate", max_retries: 2 }
+    - { model: "claude-sonnet", provider: "anthropic", mode: "delegate", max_retries: 1 }
 ```
-
-Se uma task falha, sobe para o próximo tier (se `escalate_model_on_retry: true`).
 
 ---
 
@@ -382,194 +378,88 @@ queued
   └─▶ provisioning    (criar git worktree)
         └─▶ starting  (iniciar sessão)
               └─▶ running
-                    ├─▶ checkpointing    (token limite atingido)
-                    │     └─▶ resuming   (nova sessão com checkpoint)
-                    │           └─▶ running
+                    ├─▶ checkpointing    (limite de contexto, quando aplicável)
                     ├─▶ validating       (tsc, lint, tests)
-                    │     └─▶ needs_human_review  (validação falhou)
+                    │     └─▶ needs_human_review
                     ├─▶ completed
                     ├─▶ failed
-                    ├─▶ interrupted      (daemon reiniciado)
-                    └─▶ stalled          (sem progresso)
+                    ├─▶ interrupted
+                    └─▶ stalled
 ```
 
-**Estados especiais:**
-
-- `blocked` — aguardando tarefa dependente no DAG
-- `merging_dependency` — integrando resultado de tarefa dependente
-- `needs_human_review` — validação falhou, aguarda `claw approve`
+Estados especiais: `blocked`, `merging_dependency`, `needs_human_review` (após falha de validação, se configurado).
 
 ---
 
-## Agent Loop
+## Eventos (HarnessEvent)
 
-O loop principal em `src/harness/agent-loop.ts` é um gerador assíncrono que emite `HarnessEvent`:
+Além de `session_start`, `text_delta`, `tool_use`, `tool_result`, `token_update`, `session_end`, etc., o engine emite:
 
-```typescript
-type HarnessEvent =
-  | { type: "session_start"; sessionId: string; model: string }
-  | { type: "text_delta"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; id: string; output: string; isError: boolean }
-  | { type: "permission_denied"; tool: string; reason: string }
-  | { type: "token_update"; used: number; budget: number; percent: number }
-  | { type: "checkpoint"; reason: "token_limit" | "stall" | "manual" }
-  | {
-      type: "session_end";
-      reason: "completed" | "checkpoint" | "error" | "max_iterations";
-    };
-```
+- **`phase_start` / `phase_end`** — fases do pipeline (`plan` | `execute` | `validate` | `review` | `pr`).
+- **`validation_result`** — passo a passo da validação com tempos.
 
-**Fluxo por iteração:**
-
-```
-1. adapter.chat(messages)          → stream de eventos
-2. acumular text_delta
-3. tool_use recebido:
-     a. evaluatePermission()        → allow / deny
-     b. se deny → permission_denied + error na conversa
-     c. getTool(name) ou MCP        → ToolHandler
-     d. executar com workspacePath
-     e. emitir tool_result
-4. verificar token % >= threshold   → checkpoint
-5. se sem tool_use → session_end("completed")
-6. senão: loop (até maxIterations)
-```
+Fluxo típico no delegate: adapter faz streaming do subprocesso → eventos unificados para telemetria e SSE.
 
 ---
 
 ## Checkpointing
 
-Quando o uso de tokens atinge 85% do contexto (configurável):
-
-1. Injeta `SUMMARY_PROMPT` na conversa
-2. Chama o modelo para produzir um resumo compacto
-3. Emite `checkpoint` + `session_end(reason: "checkpoint")`
-4. Salva `checkpointData` na task (DB)
-
-**Resumo injeta no sistema da próxima sessão:**
-
-```json
-{
-  "summary": "...",
-  "recentMessages": [...]
-}
-```
-
-A nova sessão começa com o contexto do checkpoint e continua naturalmente.
-
----
-
-## Permissões de ferramentas
-
-Regras avaliadas por `evaluatePermission()`:
-
-| Ferramenta   | Default | Restrição                       |
-| ------------ | ------- | ------------------------------- |
-| `read_file`  | allow   | -                               |
-| `glob`       | allow   | -                               |
-| `grep`       | allow   | -                               |
-| `ask_user`   | allow   | -                               |
-| `write_file` | allow   | apenas dentro do workspacePath  |
-| `edit_file`  | allow   | apenas dentro do workspacePath  |
-| `bash`       | allow   | comandos destrutivos bloqueados |
-
-**Comandos bash bloqueados:**
-
-- `rm -rf`, `git push --force`, `mkfs`, `DROP TABLE`
-- Qualquer comando fora do workspacePath
-
-Ao negar: emite `permission_denied` + injeta mensagem de erro na conversa para o agente tentar outra abordagem.
+Quando o runtime reporta uso alto de contexto (conforme adapter e `token_budget` no config), pode ocorrer checkpoint com resumo para continuar em nova sessão. Comportamento exato depende do provider (Claude vs OpenCode).
 
 ---
 
 ## Validação
 
-Após a sessão completar, roda validação automática no worktree.
-
-**TypeScript:**
-
-```bash
-npx tsc --noEmit    # obrigatório, retryable
-npm run lint         # opcional, retryable
-npm test             # obrigatório, retryable
-```
-
-**Python:**
-
-```bash
-mypy .               # opcional
-ruff check .         # opcional
-pytest               # obrigatório
-```
-
-- Steps obrigatórios: falha bloqueia completion
-- Steps opcionais: falha é registrada mas não bloqueia
-- `max_retries: 2` — tenta corrigir automaticamente antes de ir para `needs_human_review`
+Após a sessão (ou na fase VALIDATE do pipeline), rodam os comandos definidos em `config.yaml` para TypeScript e/ou Python. Steps obrigatórios vs opcionais e `max_retries` controlam re-tentativas antes de falha humana.
 
 ---
 
 ## Dashboard
 
-Acesso: **http://192.168.1.100:3004**
+**http://192.168.1.100:3004** (ou `localhost:3004`)
 
-| Página   | URL         | Função                                                                                                                                        |
-| -------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| DAG View | `/dag`      | Grafo de tasks com ReactFlow. Cor por status: verde=completed, azul=running, vermelho=failed, cinza=pending. Selecionar WorkItem no dropdown. |
-| Sessions | `/sessions` | Tasks ativas (running/starting/provisioning) com status em tempo real.                                                                        |
-| Metrics  | `/metrics`  | Gráfico de barras (distribuição de status), total de tokens e custo USD.                                                                      |
-| Logs     | `/logs`     | Log viewer em tempo real. Filtro por task ID. Pausar/retomar scroll.                                                                          |
-
-**Tech stack:** React 19 + Vite + Tailwind v4 + @xyflow/react + Recharts
+| Página    | URL          | Função |
+| --------- | ------------ | ------ |
+| Pipeline  | `/pipeline`  | Timeline das fases PLAN → … → PR; rota inicial padrão |
+| DAG       | `/dag`       | Grafo de tasks (React Flow) |
+| Sessions  | `/sessions`  | Tasks ativas |
+| Metrics   | `/metrics`   | Status, tokens, custo (inclui cor/provider OpenCode) |
+| Logs      | `/logs`      | Telemetria em tempo real |
 
 ---
 
 ## API REST
 
-Base: `http://localhost:3004/api`
+Base: **`http://localhost:3004/api/v1`**
 
-| Método | Endpoint          | Descrição                                 |
-| ------ | ----------------- | ----------------------------------------- |
-| GET    | `/work-items`     | Listar todos os work items                |
-| GET    | `/work-items/:id` | Work item por ID com tasks                |
-| GET    | `/tasks/:id`      | Task por ID com telemetria                |
-| GET    | `/sessions`       | Tasks ativas                              |
-| GET    | `/metrics`        | Estatísticas (status, tokens, custo)      |
-| GET    | `/logs`           | Eventos de telemetria (filtro por taskId) |
-| GET    | `/events`         | SSE stream                                |
+| Método | Endpoint | Descrição |
+| ------ | -------- | --------- |
+| GET    | `/health` | Health check |
+| GET    | `/work-items` | Lista work items |
+| GET    | `/work-items/:id` | Detalhe + tasks |
+| GET    | `/tasks/:id` | Task + telemetria |
+| GET    | `/sessions` | Sessões ativas |
+| GET    | `/metrics` | Métricas agregadas |
+| GET    | `/logs` | Logs / eventos |
+| GET    | `/events` | SSE global |
+| POST   | `/run` | Submeter run remoto (`repo`, `prompt`, `model` opcional) |
+| GET    | `/tasks/:id/stream` | SSE por task |
 
-**Exemplo: submeter via API**
+Exemplo:
 
 ```bash
-curl -X POST http://192.168.1.100:3004/api/work-items \
+curl -X POST http://127.0.0.1:3004/api/v1/run \
   -H "Content-Type: application/json" \
-  -d '{"title":"minha feature","repos":["/caminho/no/mini"]}'
+  -d '{"repo":"/caminho/absoluto/repo","prompt":"sua tarefa"}'
 ```
 
 ---
 
 ## SSE / Eventos em tempo real
 
-Endpoint: `GET /api/events`
+`GET /api/v1/events` — broadcast global. Reconexão com header `Last-Event-ID` e buffer Redis (replay).
 
-Eventos emitidos em tempo real para o dashboard e qualquer cliente SSE:
-
-```
-id: 42
-event: task_status_changed
-data: {"taskId":"abc","status":"running","model":"qwen3.5-plus"}
-
-id: 43
-event: text_delta
-data: {"taskId":"abc","text":"Analisando o código..."}
-```
-
-**Reconexão com replay:**
-
-- Enviar header `Last-Event-ID: N` na reconexão
-- Buffer circular (500 eventos) no Redis garante replay
-
-**Keep-alive:** ping a cada 15 segundos para manter conexão aberta.
+Streams por task: ver `GET /api/v1/tasks/:id/stream` na resposta do `POST /run`.
 
 ---
 
@@ -577,251 +467,83 @@ data: {"taskId":"abc","text":"Analisando o código..."}
 
 ```yaml
 cleanup:
-  telemetry_heartbeat_retention_days: 14 # heartbeats
-  telemetry_events_retention_days: 90 # outros eventos
-  # cost_snapshot: preservado para sempre
+  telemetry_heartbeat_retention_days: 14
+  telemetry_events_retention_days: 90
 ```
 
-Aplicar manualmente: `claw cleanup`
-Limpeza automática: no boot do daemon + após merge de PR.
+`claw cleanup` aplica política manualmente; o daemon também reconcilia worktrees.
 
 ---
 
 ## Configuração
 
-Arquivo: `config/config.yaml`
+Arquivo: `config/config.yaml` (override: `CLAW_ENGINE_CONFIG`).
 
-```yaml
-engine:
-  name: "Claw Engine"
-  port: 3004
-  host: "0.0.0.0"
-  worktrees_dir: "~/server/.worktrees"
+Pontos importantes:
 
-database:
-  host: "127.0.0.1"
-  port: 5432
-  database: "claw_engine"
-  user: "claw_engine"
-  password_env: "CLAW_ENGINE_DB_PASS" # env var com a senha
-
-redis:
-  host: "127.0.0.1"
-  port: 6379
-
-providers:
-  alibaba:
-    api_key_env: "DASHSCOPE_API_KEY"
-    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    rate_limit:
-      max_requests_per_minute: 8
-  anthropic:
-    binary: "claude"
-    estimated_daily_limit: 500000 # tokens/dia
-    warning_percent: 0.70 # avisar ao atingir 70%
-    force_qwen_percent: 0.85 # forçar Qwen ao atingir 85%
-
-router:
-  complexity_signals:
-    refactor: 3
-    debug: 3
-    architecture: 3
-    # ... ver seção Roteamento
-
-sessions:
-  max_parallel: 3
-  max_parallel_engine: 3
-  max_parallel_delegate: 1 # Claude é caro, 1 por vez
-
-token_budget:
-  warning_threshold: 0.75
-  checkpoint_threshold: 0.85 # checkpoint ao atingir 85%
-  reserve_for_summary: 10000 # tokens reservados para resumo
-
-github:
-  token_env: "GITHUB_TOKEN"
-  default_org: "dougss"
-  auto_create_pr: true
-```
+- **`providers.opencode`**: `binary` (default `opencode`), `default_model` (ex.: `dashscope/qwen3-coder-plus`).
+- **`providers.anthropic`**: `binary`, `flags`, limites e `force_qwen_percent` (pressão de orçamento legada; roteamento principal é classificador + chain).
+- **`providers.alibaba`**: chave (`api_key_env`), `base_url` para classificação.
+- **`mcp`**: servidores MCP opcionais; herança de arquivo externo via `inherit_from`.
+- **`github`**: `GITHUB_TOKEN`, org padrão, `auto_create_pr`.
+- **`notifications.telegram`**: via OpenClaw se habilitado.
 
 ---
 
 ## Banco de dados
 
-PostgreSQL `claw_engine` (127.0.0.1:5432) — 5 tabelas:
-
-### `work_items`
-
-| Coluna                       | Tipo          | Descrição                                 |
-| ---------------------------- | ------------- | ----------------------------------------- |
-| id                           | uuid PK       | -                                         |
-| title, description           | varchar, text | -                                         |
-| source                       | varchar       | "cli", "github", "api"                    |
-| status                       | varchar       | queued/running/completed/failed/cancelled |
-| priority                     | int           | 1-5, default 3                            |
-| dag                          | jsonb         | WorkItemDAG completo                      |
-| total_tokens_used            | bigint        | acumulado                                 |
-| total_cost_usd               | numeric       | acumulado                                 |
-| tasks_total, tasks_completed | int           | progresso                                 |
-
-### `tasks`
-
-| Coluna                       | Tipo                  | Descrição                   |
-| ---------------------------- | --------------------- | --------------------------- |
-| id                           | uuid PK               | -                           |
-| work_item_id                 | uuid FK               | → work_items                |
-| dag_node_id                  | varchar               | ID dentro do DAG            |
-| repo, branch                 | varchar               | `claw/<task-id>`            |
-| worktree_path                | varchar               | `~/server/.worktrees/<id>`  |
-| status                       | varchar               | 14 estados possíveis        |
-| model, mode                  | varchar               | routed model & mode         |
-| fallback_chain_position      | int                   | posição atual na chain      |
-| attempt, max_attempts        | int                   | retries                     |
-| last_error, error_class      | text, varchar         | falha atual                 |
-| tokens_used, cost_usd        | bigint, numeric       | custo da task               |
-| checkpoint_data              | jsonb                 | dados do último checkpoint  |
-| validation_results           | jsonb                 | resultado de tsc/lint/tests |
-| pr_url, pr_number, pr_status | varchar, int, varchar | PR no GitHub                |
-
-### `session_telemetry`
-
-Todos os eventos do agent loop: tool_use, text_delta, checkpoint, heartbeat, etc.
-
-### `routing_history`
-
-Decisões de roteamento para o learning loop (ajuste estatístico de scores).
-
-### `cost_snapshots`
-
-Snapshots acumulados de custo por work item. Preservados para sempre.
+PostgreSQL `claw_engine` em `127.0.0.1:5432`. Tabelas principais: `work_items`, `tasks`, `session_telemetry`, `routing_history`, `cost_snapshots`. Ver código em `src/storage/schema/`.
 
 ---
 
 ## Daemon
 
-`src/daemon.ts` — processo que roda o servidor HTTP + orquestra o Scheduler.
-
-**Na inicialização:**
-
-1. Carregar config
-2. Conectar Redis
-3. **Reconciliação:**
-   - Listar dirs em `~/server/.worktrees/`
-   - Verificar quais IDs estão ativos no DB
-   - Remover dirs órfãos (no disco mas não no DB)
-   - Re-enfileirar tasks que estavam `running` quando o daemon morreu → marcar como `interrupted`
-4. Iniciar Fastify na porta 3004
-5. SIGTERM/SIGINT: fechar Fastify → Redis → DB → exit
-
-**LaunchAgent:** `~/Library/LaunchAgents/dev.claw-engine.server.plist`
-
-- KeepAlive: sim (auto-restart em crash)
-- Logs: `~/server/logs/claw-engine.log`
+Sobe Fastify na porta configurada, reconcilia worktrees ao iniciar, mantém filas BullMQ e conexão Redis. LaunchAgent: `~/Library/LaunchAgents/dev.claw-engine.server.plist`, logs em `~/server/logs/claw-engine.log`.
 
 ---
 
 ## Testes
 
 ```bash
-# Unit tests (sem infra)
 npm test
-
-# Integration tests (requer Postgres + Redis)
-npm run test:integration
-
-# Watch mode
+npm run test:integration   # Postgres + Redis
 npm run test:watch
-
-# Limpar dados de testes do banco
-docker exec postgres psql -U claw_engine -d claw_engine -c "TRUNCATE work_items CASCADE;"
 ```
-
-**Suites:**
-
-| Arquivo                                  | Tipo        | Cobre                                  |
-| ---------------------------------------- | ----------- | -------------------------------------- |
-| `config.test.ts`                         | Unit        | Parsing e validação do YAML            |
-| `core/router.test.ts`                    | Unit        | Lógica de roteamento e keyword scoring |
-| `core/retention.test.ts`                 | Unit        | Política de retenção de telemetria     |
-| `core/learning-loop.test.ts`             | Unit        | Cálculo de success rates               |
-| `core/dag-schema.test.ts`                | Unit        | Validação do schema Zod                |
-| `harness/agent-loop.test.ts`             | Unit        | Loop com mock adapter                  |
-| `harness/permissions.test.ts`            | Unit        | Avaliação de permissões                |
-| `harness/checkpoint.test.ts`             | Unit        | Lógica de checkpoint                   |
-| `integrations/claude-pipe-parse.test.ts` | Unit        | Parser do stream-json                  |
-| `storage-repos.test.ts`                  | Integration | CRUD no banco real                     |
-| `scheduler.test.ts`                      | Integration | Orquestração BullMQ + Redis            |
-| `api.test.ts`                            | Integration | Endpoints REST                         |
-| `reconcile.test.ts`                      | Integration | Reconciliação de worktrees             |
 
 ---
 
-## Estrutura de diretórios
+## Estrutura de diretórios (resumo)
 
 ```
 claw-engine/
-├── bin/
-│   └── claw.js                    # Binário global (npm link)
-├── config/
-│   └── config.yaml                # Configuração principal
+├── bin/claw.js
+├── config/config.yaml
+├── config/mcp.json
 ├── src/
-│   ├── api/
-│   │   ├── routes/                # work-items, tasks, logs, metrics, sessions
-│   │   └── sse.ts                 # SSE + Redis pub/sub + circular buffer
-│   ├── cli/
-│   │   ├── commands/              # 15 comandos CLI
-│   │   └── index.ts               # Commander.js
+│   ├── api/routes/          # work-items, tasks, run-api, metrics, logs, sessions, stats
+│   ├── cli/commands/
 │   ├── core/
-│   │   ├── dag-schema.ts          # WorkItemDAG Zod schemas
-│   │   ├── decomposer.ts          # LLM feature → DAG
-│   │   ├── error-classifier.ts    # Classificação de erros para retry
-│   │   ├── health-monitor.ts      # Health checks de sessão
-│   │   ├── learning-loop.ts       # Router feedback loop
-│   │   ├── reconcile.ts           # Startup: orphan cleanup + requeue
-│   │   ├── retention.ts           # Política de retenção de telemetria
-│   │   ├── router.ts              # Roteamento 3-layer
-│   │   ├── scheduler.ts           # BullMQ DAG orchestration
-│   │   ├── session-manager.ts     # Ciclo de vida de sessão
-│   │   ├── state-machine.ts       # Transições de estado
-│   │   └── validation-runner.ts   # tsc, lint, tests
-│   ├── daemon.ts                  # Entry point do servidor
+│   │   ├── classifier.ts   # LLM complexity
+│   │   ├── pipeline.ts     # fases PLAN…PR
+│   │   ├── router.ts
+│   │   ├── scheduler.ts
+│   │   └── …
 │   ├── harness/
-│   │   ├── agent-loop.ts          # Loop principal de streaming
-│   │   ├── context-builder.ts     # System/user prompt
-│   │   ├── events.ts              # HarnessEvent types
-│   │   ├── model-adapters/
-│   │   │   ├── alibaba-adapter.ts # DashScope/OpenAI-compatible
-│   │   │   ├── claude-pipe-adapter.ts  # `claude -p` subprocess
-│   │   │   └── mock-adapter.ts    # Para testes
-│   │   ├── permissions.ts         # Tool permission rules
-│   │   ├── token-budget.ts        # Tracking de contexto
-│   │   └── tools/
-│   │       ├── builtins/          # bash, read, write, edit, glob, grep, ask_user
-│   │       ├── tool-registry.ts
-│   │       └── tool-types.ts
+│   │   ├── events.ts
+│   │   └── model-adapters/  # opencode-pipe-adapter, claude-pipe, …
 │   ├── integrations/
-│   │   ├── claude-p/              # runClaudePipe + parseClaudeLine
-│   │   ├── git/                   # Worktree operations
-│   │   ├── github/                # PR creation
-│   │   ├── mcp/                   # MCP client
-│   │   └── openclaw/              # OpenClaw notifications
-│   ├── server.ts                  # Fastify setup + dashboard estático
-│   ├── storage/
-│   │   ├── db.ts                  # Drizzle ORM singleton
-│   │   ├── repositories/          # work-items, tasks, telemetry, cost, routing
-│   │   └── schema/                # 5 tabelas Drizzle
-│   ├── dashboard/                 # React app (src/dashboard/)
-│   │   └── src/
-│   │       ├── App.tsx
-│   │       ├── lib/api.ts         # fetch helpers
-│   │       ├── lib/sse.ts         # EventSource + auto-reconnect
-│   │       └── pages/             # dag, sessions, metrics, logs
-│   └── config-schema.ts           # Zod config schema
-├── tests/
-│   ├── unit/
-│   └── integration/
-├── migrations/
-├── dist/                          # Build output
-│   └── dashboard/                 # React build (Vite outDir)
-└── package.json
+│   │   ├── opencode/opencode-pipe.ts
+│   │   ├── claude-p/
+│   │   ├── github/
+│   │   └── openclaw/
+│   ├── dashboard/src/       # React (pipeline, dag, sessions, metrics, logs)
+│   └── …
+├── tests/unit|integration/
+└── migrations/
 ```
+
+---
+
+## Licença / projeto
+
+`private` — uso interno no Mac Mini server (`CLAUDE.md` na raiz `~/server`).

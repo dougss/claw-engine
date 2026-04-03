@@ -112,7 +112,7 @@ async function handleTaskSseConnection(
 
 export function registerRunApiRoutes(app: FastifyInstance, db: Db, redis: any): void {
   // POST /api/v1/run - Submit a new task
-  app.post("/v1/run", async (request, reply) => {
+  app.post("/run", async (request, reply) => {
     const { repo, prompt, model } = request.body as RunRequestBody;
     
     // Validate inputs
@@ -290,7 +290,7 @@ export function registerRunApiRoutes(app: FastifyInstance, db: Db, redis: any): 
   });
 
   // GET /api/v1/tasks/:id/stream - SSE stream for a specific task
-  app.get("/v1/tasks/:id/stream", async (request, reply) => {
+  app.get("/tasks/:id/stream", async (request, reply) => {
     const { id } = request.params as { id: string };
     
     // Validate that task exists

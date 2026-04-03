@@ -456,7 +456,7 @@ export async function runPipeline(
     githubInstallationId,
     githubPrivateKeyPath,
     githubBotUserId,
-    defaultBranch,
+    defaultBranch: defaultBranchOverride,
   } = input;
   const validationSteps = config.validation.typescript;
   const maxReviewRetries = input.maxReviewRetries ?? 1;
@@ -616,10 +616,9 @@ export async function runPipeline(
     }
   }
 
-  const defaultBranch = getDefaultBranch(repoPath);
-  const prBase = defaultBranch ?? resolveDefaultBranch(repoPath);
+  const prBase = defaultBranchOverride ?? resolveDefaultBranch(repoPath);
 
-  const prUrl = await prPhase({
+  prUrl = await prPhase({
     repoPath,
     prompt,
     review,
