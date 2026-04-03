@@ -69,9 +69,11 @@ export function useTasks() {
     }
   });
 
-  // Initial fetch
+  // Initial fetch + polling fallback (CLI tasks don't emit SSE events)
   useEffect(() => {
     fetchTasks();
+    const interval = setInterval(fetchTasks, 10_000);
+    return () => clearInterval(interval);
   }, []);
 
   const selectedTask = tasks.find((task) => task.id === selectedId) || null;

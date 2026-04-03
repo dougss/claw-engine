@@ -76,11 +76,11 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
 
   return (
     <div className="flex-1 h-full flex flex-col bg-bg">
-      {/* Top bar */}
-      <div className="px-4 py-3 border-b border-border">
+      {/* Top region - 30% height for task metadata and prompt */}
+      <div className="h-[30%] shrink-0 flex flex-col overflow-hidden border-b border-border px-4 py-3">
         {task ? (
           <>
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center gap-2">
               <span
                 className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${getStatusClass(task.status)}`}
               >
@@ -100,21 +100,11 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
                 </span>
               )}
             </div>
-            {/* Main headline showing the first line of description */}
-            <h2 className="text-xl sm:text-2xl font-semibold text-text-primary leading-tight mb-2">
-              {task.description?.split('\n')[0]?.length > 90 
-                ? task.description.split('\n')[0].substring(0, 87) + '...' 
-                : task.description.split('\n')[0]}
-            </h2>
-            
-            {/* Scrollable section for full prompt if there's more content */}
-            {task.description.includes('\n') || task.description.length > 90 ? (
-              <div className="max-h-32 overflow-y-auto border border-border rounded-md p-2 bg-surface">
-                <p className="text-base sm:text-lg text-text-secondary whitespace-pre-wrap break-words">
-                  {task.description}
-                </p>
-              </div>
-            ) : null}
+            <div className="flex-1 min-h-0 overflow-y-auto mt-2 rounded-md border border-border bg-surface-2/40 px-3 py-3">
+              <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap break-words">
+                {task.description}
+              </p>
+            </div>
           </>
         ) : (
           <div className="text-text-tertiary text-sm">
@@ -123,36 +113,39 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
         )}
       </div>
 
-      {/* Phase bar for pipeline runs */}
-      {task && isPipelineRunFromEvents(events) && events.length > 0 && (
-        <PhaseBar events={events as any} />
-      )}
-
-      {/* Stream area */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto"
-      >
-        {events.length > 0 ? (
-          <div className="divide-y divide-border/30">
-            {events.map((event, index) => (
-              <StreamEventComponent
-                key={`${event.id}-${index}`}
-                event={event}
-                now={Date.now()}
-              />
-            ))}
-          </div>
-        ) : task ? (
-          <div className="p-4 text-text-tertiary text-center text-sm">
-            No events to display yet...
-          </div>
-        ) : (
-          <div className="p-4 text-text-tertiary text-center text-sm">
-            Select a task to view its output
-          </div>
+      {/* Bottom region - 70% height for phase bar and stream events */}
+      <div className="flex-1 min-h-0 flex flex-col">
+        {/* Phase bar for pipeline runs */}
+        {task && isPipelineRunFromEvents(events) && events.length > 0 && (
+          <PhaseBar events={events as any} />
         )}
+
+        {/* Stream area - unchanged */}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto"
+        >
+          {events.length > 0 ? (
+            <div className="divide-y divide-border/30">
+              {events.map((event, index) => (
+                <StreamEventComponent
+                  key={`${event.id}-${index}`}
+                  event={event}
+                  now={Date.now()}
+                />
+              ))}
+            </div>
+          ) : task ? (
+            <div className="p-4 text-text-tertiary text-center text-sm">
+              No events to display yet...
+            </div>
+          ) : (
+            <div className="p-4 text-text-tertiary text-center text-sm">
+              Select a task to view its output
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
