@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { TaskFull } from "../lib/api";
 import { useSseSubscription } from "../lib/sse-context";
 
@@ -6,6 +6,12 @@ export function useTasks() {
   const [tasks, setTasks] = useState<TaskFull[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  
+  // Use ref to access selectedId in fetchTasks without causing re-renders
+  const selectedIdRef = useRef(selectedId);
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const fetchTasks = async () => {
     try {
@@ -44,7 +50,7 @@ export function useTasks() {
         setTasks(sortedTasks);
 
         // Auto-select first running task or most recent if none running
-        if (!selectedId) {
+        if (!selectedIdRef.current) {
           const runningTask = sortedTasks.find(
             (task) => task.status === "running",
           );
@@ -74,7 +80,7 @@ export function useTasks() {
     fetchTasks();
     const interval = setInterval(fetchTasks, 10_000);
     return () => clearInterval(interval);
-  }, [fetchTasks]); // Include fetchTasks in dependency array to prevent stale closure
+  }, []); // Empty dependency array since fetchTasks no longer has dependencies
 
   const selectedTask = tasks.find((task) => task.id === selectedId) || null;
 

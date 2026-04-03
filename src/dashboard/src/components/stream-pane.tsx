@@ -77,10 +77,10 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
   return (
     <div className="flex-1 h-full flex flex-col bg-bg">
       {/* Top region - 30% height for task metadata and prompt */}
-      <div className="basis-[30%] shrink-0 flex flex-col overflow-hidden border-b border-border px-4 py-3">
+      <div className="h-[30%] max-h-[30%] shrink-0 flex flex-col overflow-hidden border-b border-border px-4 py-3">
         {task ? (
           <>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 mb-2">
               <span
                 className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${getStatusClass(task.status)}`}
               >
@@ -100,13 +100,7 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
                 </span>
               )}
             </div>
-             {/* Title line for better readability */}
-            <div className="mb-2 font-medium text-text-primary text-sm truncate">
-              {task.description?.split('\n')[0]?.length > 90 
-                ? task.description.split('\n')[0].substring(0, 87) + '...' 
-                : task.description.split('\n')[0] || 'Untitled Task'}
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto rounded-md border border-border bg-surface px-3 py-3">
+            <div className="flex-1 min-h-0 overflow-y-auto rounded-md border border-border bg-surface-2/40 px-3 py-3">
               <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap break-words">
                 {task.description}
               </p>

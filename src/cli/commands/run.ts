@@ -18,6 +18,7 @@ import {
 import { insertTelemetryEvent } from "../../storage/repositories/telemetry-repo.js";
 import { classifyTask } from "../../core/classifier.js";
 import { execSync } from "node:child_process";
+import { publishEvent } from "../../api/sse.js";
 
 export function registerRunCommand(program: import("commander").Command) {
   function getDefaultBranch(repoPath: string): string {
@@ -207,6 +208,21 @@ export function registerRunCommand(program: import("commander").Command) {
           : route;
         const mode = "delegate" as const;
 
+        // Connect Redis for SSE publishing (best-effort, dashboard sees live events)
+        let redis: import("ioredis").Redis | null = null;
+        try {
+          const { Redis } = await import("ioredis");
+          redis = new Redis({
+            host: config.redis.host,
+            port: config.redis.port,
+            maxRetriesPerRequest: 1,
+            lazyConnect: true,
+          });
+          await redis.connect();
+        } catch {
+          redis = null; // SSE publishing is optional
+        }
+
         console.log(`classify → ${complexity}`);
         console.log(
           `routing → ${effectiveRoute.provider} (${effectiveRoute.reason})`,
@@ -388,6 +404,14 @@ export function registerRunCommand(program: import("commander").Command) {
 
           try {
             for await (const event of delegateEvents) {
+              // Publish to Redis SSE so the dashboard sees live events
+              if (redis && taskId) {
+                void publishEvent(redis, {
+                  type: event.type,
+                  data: { taskId, ...event },
+                }).catch(() => {});
+              }
+
               if (event.type === "text_delta") {
                 process.stdout.write(event.text);
               } else if (event.type === "tool_use") {
@@ -469,6 +493,7 @@ export function registerRunCommand(program: import("commander").Command) {
               rmSync(tempDir, { recursive: true, force: true });
               tempDir = null;
             }
+            redis?.disconnect();
           }
 
           const taskStatus =
