@@ -2,7 +2,7 @@ import { useRef, useEffect, useState } from "react";
 import { type StreamEvent } from "../hooks/use-stream";
 import { type TaskFull } from "../lib/api";
 import { StreamEventComponent } from "./stream-event";
-import { PhaseBar } from "./phase-bar";
+import { StepsBar } from "./phase-bar";
 
 // Helper function to check if events come from a pipeline run
 function isPipelineRunFromEvents(events: StreamEvent[]): boolean {
@@ -117,7 +117,11 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
       <div className="flex-1 min-h-0 flex flex-col">
         {/* Phase bar for pipeline runs */}
         {task && isPipelineRunFromEvents(events) && events.length > 0 && (
-          <PhaseBar events={events as any} />
+          <StepsBar 
+            events={events} 
+            selectedPhase={null} 
+            onSelectPhase={() => {}} 
+          />
         )}
 
         {/* Stream area - unchanged */}
