@@ -1,9 +1,9 @@
 import { useRef, useEffect, useState } from "react";
-import { type StreamEvent } from "../hooks/use-stream";
+import { type StreamEvent, filterEventsByPhase } from "../hooks/use-stream";
 import { type TaskFull } from "../lib/api";
 import { StreamEventComponent } from "./stream-event";
 import { PipelineCards } from "./phase-bar";
-import { filterEventsByPhase } from "../hooks/use-stream";
+import { PromptModal } from "./prompt-modal";
 
 interface StreamPaneProps {
   task: TaskFull | null;
@@ -13,12 +13,14 @@ interface StreamPaneProps {
 
 export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
   const [selectedPhase, setSelectedPhase] = useState<string | null>(null);
+  const [showPrompt, setShowPrompt] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  // Reset selectedPhase when task changes
+  // Reset selectedPhase and showPrompt when task changes
   useEffect(() => {
     setSelectedPhase(null);
+    setShowPrompt(false);
   }, [task?.id]);
 
   // Calculate duration if task has started
@@ -64,7 +66,7 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
 
     // Scroll to bottom when new events arrive
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [filteredEvents, autoScroll]); // Changed to filteredEvents
+  }, [filteredEvents, autoScroll]);
 
   // Handle manual scrolling - pause auto-scroll when user scrolls away from bottom
   const handleScroll = () => {
@@ -82,44 +84,50 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
 
   return (
     <div className="flex-1 h-full flex flex-col bg-bg overflow-hidden">
-      {/* Zone 1: Prompt Card */}
-      <div className="max-h-[15vh] shrink-0 overflow-hidden border-b border-border px-4 py-3">
+      {/* ZONE 1 — Compact header (shrink-0, border-b border-border, px-4 py-3) */}
+      <div className="shrink-0 border-b border-border px-4 py-3">
         {task ? (
           <>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between">
+              <h2 className="text-text-primary font-medium text-sm truncate">
+                {task.description.slice(0, 80)}
+              </h2>
+              <button 
+                onClick={() => setShowPrompt(true)}
+                className="text-accent text-xs cursor-pointer hover:underline shrink-0 ml-3"
+              >
+                Prompt
+              </button>
+            </div>
+            <div className="flex items-center gap-2 mt-1">
               <span
                 className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${getStatusClass(task.status)}`}
               >
                 {task.status}
               </span>
               {task.model && (
-                <span className="text-xs font-mono text-text-tertiary bg-surface-2 px-1.5 py-0.5 rounded shrink-0">
+                <span className="text-xs font-mono text-text-tertiary bg-surface-2 px-1.5 py-0.5 rounded">
                   {task.model}
                 </span>
               )}
-              <span className="text-text-tertiary text-xs shrink-0">
+              <span className="text-text-tertiary text-xs">
                 {getDuration()}
               </span>
               {isLive && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30 shrink-0">
+                <span className="text-xs px-2 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30">
                   LIVE
                 </span>
               )}
             </div>
-            <div className="overflow-y-auto bg-surface-2/40 rounded border border-border px-3 py-2 mt-2">
-              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-text-primary">
-                {task.description}
-              </p>
-            </div>
           </>
         ) : (
-          <div className="text-text-tertiary text-sm">
+          <h2 className="text-text-tertiary font-medium text-sm">
             Select a task to view its output
-          </div>
+          </h2>
         )}
       </div>
 
-      {/* Zone 2: Pipeline Cards (only if isPipeline) */}
+      {/* ZONE 2 — Pipeline cards (only if isPipeline) */}
       {isPipeline && (
         <PipelineCards 
           events={events}
@@ -128,11 +136,11 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
         />
       )}
 
-      {/* Zone 3: Log Viewer */}
+      {/* ZONE 3 — Log viewer (flex-1 min-h-0 overflow-y-auto py-2) */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto"
+        className="flex-1 min-h-0 overflow-y-auto py-2"
       >
         {task ? (
           filteredEvents.length > 0 ? (
@@ -144,7 +152,7 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
               />
             ))
           ) : (
-            <div className="p-4 text-text-tertiary text-center text-sm">
+            <div className="opacity-50 p-4 text-text-tertiary text-center text-sm">
               Waiting for events...
             </div>
           )
@@ -154,6 +162,14 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
           </div>
         )}
       </div>
+
+      {/* Prompt modal */}
+      {showPrompt && task && (
+        <PromptModal 
+          prompt={task.description} 
+          onClose={() => setShowPrompt(false)} 
+        />
+      )}
     </div>
   );
 };
