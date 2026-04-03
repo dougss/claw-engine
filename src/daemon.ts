@@ -7,6 +7,10 @@ import { checkSessionHealth } from "./core/health-monitor.js";
 import { activeSessionRegistry } from "./core/session-registry.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Worker, type Job } from "bullmq";
+import { orchestrateTask, type OrchestrationContext } from "./core/orchestration-loop.js";
+import { getDb } from "./storage/db.js";
+import { TaskJobData } from "./core/scheduler.js";
 
 async function main(): Promise<void> {
   const configPath = process.env.CLAW_ENGINE_CONFIG;
@@ -42,6 +46,45 @@ async function main(): Promise<void> {
     `[claw-engine] listening on ${config.engine.host}:${config.engine.port}`,
   );
 
+  // Create workers for each provider queue
+  const QUEUE_NAMES = ["claw:alibaba", "claw:anthropic", "claw:default"];
+  const workers: Worker[] = [];
+
+  // Connection string for DB
+  const connStr = process.env.CLAW_ENGINE_DATABASE_URL ??
+    (() => {
+      const pw = process.env[config.database.password_env] ?? "claw_engine_local";
+      return `postgresql://${config.database.user}:${pw}@${config.database.host}:${config.database.port}/${config.database.database}`;
+    })();
+
+  for (const queueName of QUEUE_NAMES) {
+    const worker = new Worker<TaskJobData>(
+      queueName,
+      async (job: Job<TaskJobData>) => {
+        const ctx: OrchestrationContext = {
+          taskId: job.data.dagNodeId, // or look up task ID from dagNodeId
+          workItemId: job.data.workItemId,
+          repo: job.data.repo,
+          branch: job.data.branch,
+          description: job.data.description,
+          complexity: job.data.complexity,
+          provider: job.data.provider,
+          attempt: 1,
+          maxAttempts: 3,
+          db: getDb({ connectionString: connStr }),
+          redis,
+          config,
+        };
+        await orchestrateTask(ctx);
+      },
+      {
+        connection: { host: config.redis.host, port: config.redis.port },
+        concurrency: queueName.includes("anthropic") ? 1 : 3,
+      },
+    );
+    workers.push(worker);
+  }
+
   // Periodic health check — sessions register themselves via session-registry
   const healthCheckInterval = setInterval(() => {
     for (const [sessionId, entry] of activeSessionRegistry) {
@@ -62,6 +105,10 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`[claw-engine] received ${signal}, shutting down...`);
     clearInterval(healthCheckInterval);
+    
+    // Close all workers gracefully before shutting down
+    await Promise.all(workers.map(worker => worker.close()));
+    
     await app.close();
     await redis.quit();
     await closeDb();

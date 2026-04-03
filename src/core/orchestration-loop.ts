@@ -22,7 +22,7 @@ import { updateTaskTokens, setTaskCheckpointData } from "../storage/repositories
 import { insertTelemetryEvent } from "../storage/repositories/telemetry-repo.js";
 import { updateWorkItemStatus as updateWorkItemRollup, rollupWorkItemTokens } from "../storage/repositories/work-items-repo.js";
 
-interface OrchestrationContext {
+export interface OrchestrationContext {
   taskId: string;
   workItemId: string;
   repo: string; // absolute path to the repo
@@ -72,7 +72,8 @@ export async function orchestrateTask(ctx: OrchestrationContext): Promise<void> 
         prompt: ctx.description,
         workspacePath: worktreePath,
         claudeBin: ctx.config.providers.anthropic.binary,
-        flags: ctx.config.providers.anthropic.flags
+        timeoutMs: 3_600_000, // 60 minutes default
+        maxTurns: 50 // reasonable default
       });
     } else {
       // Default to opencode
@@ -135,7 +136,14 @@ export async function orchestrateTask(ctx: OrchestrationContext): Promise<void> 
       const validationResult = await runValidation({
         workspacePath: worktreePath,
         steps: ctx.config.validation.typescript,
-        execCommand: (cmd: string) => execSync(cmd, { cwd: worktreePath, encoding: 'utf-8' })
+        execCommand: async (cmd: string, cwd: string) => {
+          try {
+            const result = execSync(cmd, { cwd, encoding: 'utf-8' });
+            return { stdout: result, exitCode: 0 };
+          } catch (e: any) {
+            return { stdout: e.stderr || e.stdout || String(e), exitCode: e.status || 1 };
+          }
+        }
       });
 
       // Store validation results
@@ -144,7 +152,11 @@ export async function orchestrateTask(ctx: OrchestrationContext): Promise<void> 
       
       // If validation fails and attempts remain, retry
       if (!validationResult.passed && ctx.attempt < ctx.maxAttempts) {
-        const retryPrompt = `Previous attempt failed validation. Error output:\n${validationResult.output}\n\nPlease fix these issues and try again: ${ctx.description}`;
+        const stepResults = validationResult.steps.map(step => 
+          `${step.name}: ${step.passed ? 'PASS' : 'FAIL'} (${step.output})`
+        ).join('\n');
+        
+        const retryPrompt = `Previous attempt failed validation. Error output:\n${stepResults}\n\nPlease fix these issues and try again: ${ctx.description}`;
         
         // Recurse with incremented attempt
         const retryCtx: OrchestrationContext = {
