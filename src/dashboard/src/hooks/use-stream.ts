@@ -1,16 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { fetchTaskWithTelemetry, type TelemetryEntry } from "../lib/api";
+import { useSseSubscription } from "../lib/sse-context";
 
 export interface StreamEvent {
   id: string;
   type: string;
   timestamp: number;
   data: Record<string, unknown>;
-}
-
-interface UseStreamResult {
-  events: StreamEvent[];
-  isLive: boolean;
 }
 
 function telemetryToEvents(telemetry: TelemetryEntry[]): StreamEvent[] {
@@ -22,47 +18,25 @@ function telemetryToEvents(telemetry: TelemetryEntry[]): StreamEvent[] {
   }));
 }
 
-const SSE_EVENT_TYPES = [
-  "session_start",
-  "session_end",
-  "session_resume",
-  "text_delta",
-  "tool_use",
-  "tool_result",
-  "token_update",
-  "checkpoint",
-  "compaction",
-  "api_retry",
-  "model_fallback",
-  "permission_denied",
-  "validation_result",
-  "phase_start",
-  "phase_end",
-  "routing_decision",
-  "error",
-  "heartbeat",
-] as const;
-
 export const useStream = (
   taskId: string | null,
   taskStatus: string,
-): UseStreamResult => {
+): { events: StreamEvent[]; isLive: boolean } => {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [isLive, setIsLive] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
+  const taskIdRef = useRef(taskId);
 
   useEffect(() => {
-    // Cleanup previous
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
-    }
+    taskIdRef.current = taskId;
+  }, [taskId]);
+
+  // Load historical telemetry when task changes
+  useEffect(() => {
     setEvents([]);
     setIsLive(false);
 
     if (!taskId) return;
 
-    // Always load historical telemetry first
     let cancelled = false;
     const loadHistory = async () => {
       try {
@@ -79,53 +53,36 @@ export const useStream = (
 
     loadHistory();
 
-    // If running, also connect SSE for new events
     if (taskStatus === "running") {
-      try {
-        const es = new EventSource(`/api/v1/tasks/${taskId}/stream`);
-        esRef.current = es;
-        setIsLive(true);
-
-        const handleEvent = (ev: MessageEvent) => {
-          try {
-            const data = JSON.parse(ev.data) as Record<string, unknown>;
-            const streamEvent: StreamEvent = {
-              id: String(data.id ?? Date.now()),
-              type: ev.type,
-              timestamp:
-                typeof data.timestamp === "number"
-                  ? data.timestamp
-                  : Date.now(),
-              data: (data.data as Record<string, unknown>) ?? data,
-            };
-            setEvents((prev) => [...prev, streamEvent]);
-          } catch {
-            // ignore malformed
-          }
-        };
-
-        for (const type of SSE_EVENT_TYPES) {
-          es.addEventListener(type, handleEvent as EventListener);
-        }
-
-        es.onerror = () => {
-          setIsLive(false);
-          es.close();
-          esRef.current = null;
-        };
-      } catch {
-        setIsLive(false);
-      }
+      setIsLive(true);
     }
 
     return () => {
       cancelled = true;
-      if (esRef.current) {
-        esRef.current.close();
-        esRef.current = null;
-      }
     };
   }, [taskId, taskStatus]);
+
+  // Listen to global SSE for live events matching this task
+  useSseSubscription((event) => {
+    if (!taskIdRef.current) return;
+    if (!isLive && taskStatus !== "running") return;
+
+    const data = event.data as Record<string, unknown> | undefined;
+    if (!data) return;
+
+    // CLI publishes events with taskId in the data payload
+    if (data.taskId !== taskIdRef.current) return;
+
+    const streamEvent: StreamEvent = {
+      id: String(data.id ?? Date.now()),
+      type: event.type,
+      timestamp:
+        typeof data.timestamp === "number" ? data.timestamp : Date.now(),
+      data,
+    };
+
+    setEvents((prev) => [...prev, streamEvent]);
+  });
 
   return { events, isLive };
 };
