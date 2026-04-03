@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import type { StreamEvent } from "../hooks/use-stream";
 
 interface StreamEventProps {
@@ -52,12 +52,62 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
 
     case "tool_use": {
       const name = (data.name as string) || "";
+      const input = data.input as Record<string, unknown> || {};
       const preview = formatToolInput(data.input);
+      
+      // Check if this is an edit or write tool
+      const isEditTool = name === "edit" || name === "edit_file";
+      const isWriteTool = name === "write" || name === "write_file";
+      
+      // State for collapsible diff (default collapsed for historical events, expanded for live)
+      const [isDiffExpanded, setIsDiffExpanded] = useState(!timestamp || timestamp > now - 5000); // Expanded if event is recent
+      
+      // For edit tools, prepare diff lines
+      let diffLines: string[] = [];
+      if (isEditTool && typeof input.oldString === "string" && typeof input.newString === "string") {
+        const oldLines = input.oldString.split('\n');
+        const newLines = input.newString.split('\n');
+        
+        // Compare lines and generate diff
+        const maxLines = Math.max(oldLines.length, newLines.length);
+        for (let i = 0; i < maxLines; i++) {
+          const oldLine = oldLines[i];
+          const newLine = newLines[i];
+          
+          if (oldLine !== undefined && newLine === undefined) {
+            // Line removed
+            diffLines.push(`- ${oldLine}`);
+          } else if (oldLine === undefined && newLine !== undefined) {
+            // Line added
+            diffLines.push(`+ ${newLine}`);
+          } else if (oldLine !== newLine) {
+            // Both exist but are different
+            diffLines.push(`- ${oldLine}`);
+            diffLines.push(`+ ${newLine}`);
+          } else if (oldLine === newLine) {
+            // Line unchanged (we'll skip unchanged lines for brevity)
+            continue;
+          }
+        }
+      }
+      
+      // For write tools, prepare content preview
+      let contentPreview: string[] = [];
+      if (isWriteTool && typeof input.content === "string") {
+        const lines = input.content.split('\n');
+        const maxPreviewLines = 20;
+        contentPreview = lines.slice(0, maxPreviewLines).map(line => `+ ${line}`);
+        if (lines.length > maxPreviewLines) {
+          contentPreview.push('...');
+        }
+      }
 
       return (
-        <div className="py-2 px-4">
+        <div className="py-2 px-6">
           <div className="flex justify-between items-center">
-            <span className="text-accent font-mono font-bold text-sm">{name}</span>
+            <span className="text-accent font-mono font-bold text-sm">
+              {name}
+            </span>
             <span className="text-text-tertiary text-xs font-mono ml-auto">
               {formatTime(now, timestamp)}
             </span>
@@ -65,6 +115,42 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
           {preview && (
             <div className="text-text-secondary font-mono text-xs">
               {preview}
+            </div>
+          )}
+          
+          {/* Show diff/content preview for edit/write tools */}
+          {(isEditTool || isWriteTool) && ((isEditTool && diffLines.length > 0) || (isWriteTool && contentPreview.length > 0)) && (
+            <div className="mt-1">
+              <div 
+                className="text-text-tertiary text-xs cursor-pointer"
+                onClick={() => setIsDiffExpanded(!isDiffExpanded)}
+              >
+                {isEditTool 
+                  ? `Diff (${diffLines.length} lines)` 
+                  : `Content Preview (${contentPreview.length > 0 && contentPreview[contentPreview.length - 1] === '...' ? `${contentPreview.length - 1}+ lines` : `${contentPreview.length} lines`})`}
+              </div>
+              
+              {isDiffExpanded && (
+                <div className="max-h-48 overflow-y-auto bg-surface-2/40 rounded px-3 py-2 mt-1">
+                  {isEditTool ? (
+                    <pre className="font-mono text-xs whitespace-pre-wrap break-all">
+                      {diffLines.map((line, index) => (
+                        <div key={index} className={line.startsWith('- ') ? 'text-status-failed' : line.startsWith('+ ') ? 'text-status-completed' : ''}>
+                          {line}
+                        </div>
+                      ))}
+                    </pre>
+                  ) : (
+                    <pre className="font-mono text-xs whitespace-pre-wrap break-all">
+                      {contentPreview.map((line, index) => (
+                        <div key={index} className={line.startsWith('+ ') ? 'text-status-completed' : ''}>
+                          {line}
+                        </div>
+                      ))}
+                    </pre>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -76,11 +162,9 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
       if (!text.trim()) return null;
 
       return (
-        <div className="py-1 px-4">
-          <span className="text-text-tertiary">{'> '}</span>
-          <span className="text-text-secondary text-sm">
-            {text}
-          </span>
+        <div className="py-1 px-6">
+          <span className="text-text-tertiary">{"> "}</span>
+          <span className="text-text-secondary text-sm">{text}</span>
         </div>
       );
     }
@@ -96,7 +180,8 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
       return (
         <div className="py-1 text-center">
           <span className="text-stream-token font-mono text-xs opacity-60">
-            ⬡ {Math.round(percent)}% — {formatTokens(used)} / {formatTokens(budget)}
+            ⬡ {Math.round(percent)}% — {formatTokens(used)} /{" "}
+            {formatTokens(budget)}
           </span>
         </div>
       );
@@ -105,28 +190,29 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
     case "session_end": {
       const reason = (data.reason as string) || "unknown";
       const isSuccess = reason === "completed";
-      const isFailed = reason === "error" || reason === "failed" || reason.includes('fail');
+      const isFailed =
+        reason === "error" || reason === "failed" || reason.includes("fail");
 
-      let bgClass = '';
-      let textClass = '';
-      let icon = '';
+      let bgClass = "";
+      let textClass = "";
+      let icon = "";
 
       if (isSuccess) {
-        bgClass = 'bg-status-completed/10 border-status-completed';
-        textClass = 'text-status-completed';
-        icon = '✓';
+        bgClass = "bg-status-completed/10 border-status-completed";
+        textClass = "text-status-completed";
+        icon = "✓";
       } else if (isFailed) {
-        bgClass = 'bg-status-failed/10 border-status-failed';
-        textClass = 'text-status-failed';
-        icon = '✗';
+        bgClass = "bg-status-failed/10 border-status-failed";
+        textClass = "text-status-failed";
+        icon = "✗";
       } else {
-        bgClass = 'bg-status-running/10 border-status-running';
-        textClass = 'text-status-running';
-        icon = '⏹';
+        bgClass = "bg-status-running/10 border-status-running";
+        textClass = "text-status-running";
+        icon = "⏹";
       }
 
       return (
-        <div className={`mx-4 my-3 px-4 py-3 rounded border ${bgClass}`}>
+        <div className={`mx-4 my-3 px-6 py-3 rounded border ${bgClass}`}>
           <span className={`text-sm font-medium ${textClass}`}>
             {icon} Session {reason}
           </span>
@@ -140,18 +226,18 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
       const complexity = (data.complexity as string) || "";
 
       return (
-        <div className="py-1 px-4 text-text-tertiary text-xs">
-          <span>{'→ ' + mode + ' · ' + complexity + ' · ' + reason}</span>
+        <div className="py-1 px-6 text-text-tertiary text-xs">
+          <span>{"→ " + mode + " · " + complexity + " · " + reason}</span>
         </div>
       );
     }
 
     case "phase_start": {
-      const phaseLabel = ((data.phase as string) || "");
+      const phaseLabel = (data.phase as string) || "";
       const attempt = data.attempt as number | undefined;
 
       return (
-        <div className="mt-3 py-1.5 px-4 border-t border-accent/20">
+        <div className="mt-3 py-1.5 px-6 border-t border-accent/20">
           <span className="text-accent text-xs font-bold uppercase tracking-wider">
             {phaseLabel}
             {attempt && attempt > 1 && <span> ×{attempt}</span>}
@@ -163,12 +249,16 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
     case "phase_end": {
       const success = data.success !== false;
       const durationMs = data.durationMs as number | undefined;
-      const duration = durationMs !== undefined ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
+      const duration =
+        durationMs !== undefined ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
 
       return (
-        <div className="py-1 px-4">
-          <span className={`font-medium ${success ? "text-status-completed" : "text-status-failed"}`}>
-            {success ? "✓" : "✗"} PHASE {success ? `COMPLETED${duration}` : "FAILED"}
+        <div className="py-1 px-6">
+          <span
+            className={`font-medium ${success ? "text-status-completed" : "text-status-failed"}`}
+          >
+            {success ? "✓" : "✗"} PHASE{" "}
+            {success ? `COMPLETED${duration}` : "FAILED"}
           </span>
         </div>
       );

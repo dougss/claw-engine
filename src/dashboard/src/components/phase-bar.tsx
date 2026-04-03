@@ -1,11 +1,12 @@
-import { 
-  extractPhaseEvents, 
-  getPhaseStatus, 
-  getCurrentPhase, 
+import {
+  extractPhaseEvents,
+  getPhaseStatus,
+  getCurrentPhase,
   formatDuration,
   PHASE_ORDER,
-  PHASE_LABELS 
+  PHASE_LABELS,
 } from "../lib/pipeline";
+import type { PipelinePhase } from "../lib/api";
 import type { StreamEvent } from "../hooks/use-stream";
 
 interface PipelineCardsProps {
@@ -14,123 +15,135 @@ interface PipelineCardsProps {
   onSelectPhase: (phase: string | null) => void;
 }
 
-export function PipelineCards({ events, selectedPhase, onSelectPhase }: PipelineCardsProps) {
-  // Convert StreamEvent[] to the format expected by pipeline functions
-  const telemetryEvents = events.map(event => ({
+// Tailwind-safe color classes per phase (no inline styles)
+const PHASE_THEME: Record<
+  string,
+  { text: string; border: string; bg: string; badgeBg: string }
+> = {
+  plan: {
+    text: "text-[#a78bfa]",
+    border: "border-[#a78bfa]/30",
+    bg: "bg-[#a78bfa]/8",
+    badgeBg: "bg-[#a78bfa]/20",
+  },
+  execute: {
+    text: "text-[#00d4ff]",
+    border: "border-[#00d4ff]/30",
+    bg: "bg-[#00d4ff]/8",
+    badgeBg: "bg-[#00d4ff]/20",
+  },
+  validate: {
+    text: "text-[#818cf8]",
+    border: "border-[#818cf8]/30",
+    bg: "bg-[#818cf8]/8",
+    badgeBg: "bg-[#818cf8]/20",
+  },
+  review: {
+    text: "text-[#fb923c]",
+    border: "border-[#fb923c]/30",
+    bg: "bg-[#fb923c]/8",
+    badgeBg: "bg-[#fb923c]/20",
+  },
+  pr: {
+    text: "text-[#39ff8c]",
+    border: "border-[#39ff8c]/30",
+    bg: "bg-[#39ff8c]/8",
+    badgeBg: "bg-[#39ff8c]/20",
+  },
+};
+
+const STATUS_ICON: Record<string, { char: string; cls: string }> = {
+  completed: { char: "✓", cls: "text-status-completed" },
+  running: { char: "●", cls: "text-status-running animate-pulse" },
+  failed: { char: "✗", cls: "text-status-failed" },
+  pending: { char: "○", cls: "text-text-tertiary" },
+  skipped: { char: "—", cls: "text-text-tertiary" },
+};
+
+export function PipelineCards({
+  events,
+  selectedPhase,
+  onSelectPhase,
+}: PipelineCardsProps) {
+  const telemetryEvents = events.map((event) => ({
     id: event.id,
-    taskId: '', // Not needed for phase extraction
+    taskId: "",
     eventType: event.type,
     data: event.data,
-    createdAt: new Date(event.timestamp).toISOString() // Convert timestamp back to ISO string
+    createdAt: new Date(event.timestamp).toISOString(),
   }));
 
   const phaseEvents = extractPhaseEvents(telemetryEvents);
   const currentPhase = getCurrentPhase(phaseEvents);
 
-  // Helper to get retry count for a specific phase
-  const getPhaseRetryCount = (phase: string) => {
-    const phaseStarts = phaseEvents.filter(pe => 
-      pe.phase === phase && pe.eventType === "phase_start"
+  const getRetries = (phase: string) => {
+    const starts = phaseEvents.filter(
+      (pe) => pe.phase === phase && pe.eventType === "phase_start",
     ).length;
-    return Math.max(0, phaseStarts - 1);
+    return Math.max(0, starts - 1);
   };
 
-  // Helper to get duration for a specific phase
-  const getPhaseDuration = (phase: string) => {
-    const phaseStart = phaseEvents.find(pe => pe.phase === phase && pe.eventType === "phase_start");
-    const phaseEnd = phaseEvents.find(pe => pe.phase === phase && pe.eventType === "phase_end");
-    
-    if (phaseStart && phaseEnd && phaseEnd.durationMs) {
-      return formatDuration(phaseEnd.durationMs);
-    }
-    return '—';
+  const getDuration = (phase: string) => {
+    const end = phaseEvents.find(
+      (pe) => pe.phase === phase && pe.eventType === "phase_end",
+    );
+    return end?.durationMs ? formatDuration(end.durationMs) : "—";
   };
 
   return (
-    <div className="flex items-stretch gap-3 px-4 py-3 border-b border-border">
-      {/* "All" button */}
+    <div className="flex items-stretch gap-3 px-6 py-3 border-b border-border">
       <button
         onClick={() => onSelectPhase(null)}
-        className={`shrink-0 px-4 py-3 rounded-lg border cursor-pointer transition-colors text-center ${
+        className={`shrink-0 px-4 py-3 rounded-lg border cursor-pointer transition-colors text-center text-xs font-bold uppercase tracking-wider ${
           selectedPhase === null
-            ? 'bg-accent/10 border-accent text-accent'
-            : 'border-border text-text-secondary hover:border-border-active'
+            ? "bg-accent/10 border-accent text-accent"
+            : "border-border text-text-secondary hover:border-border-active"
         }`}
       >
         All
       </button>
 
-      {/* Phase cards */}
       {PHASE_ORDER.map((phase) => {
         const status = getPhaseStatus(phase, phaseEvents, currentPhase);
-        const retryCount = getPhaseRetryCount(phase);
-        const duration = getPhaseDuration(phase);
-        
-        // Determine icon based on status
-        let icon;
-        switch (status) {
-          case 'completed':
-            icon = (
-              <span className="text-status-completed text-2xl my-1">✓</span>
-            );
-            break;
-          case 'running':
-            icon = (
-              <span className="text-status-running text-2xl my-1 animate-pulse">●</span>
-            );
-            break;
-          case 'failed':
-            icon = (
-              <span className="text-status-failed text-2xl my-1">✗</span>
-            );
-            break;
-          default: // pending
-            icon = (
-              <span className="text-text-tertiary text-2xl my-1">○</span>
-            );
-        }
-
-        // Determine border based on status
-        let borderClass;
-        switch (status) {
-          case 'completed':
-            borderClass = 'border-status-completed/30';
-            break;
-          case 'running':
-            borderClass = 'border-status-running/30';
-            break;
-          case 'failed':
-            borderClass = 'border-status-failed/30';
-            break;
-          default: // pending
-            borderClass = 'border-border';
-        }
-
-        // Override with selected style if this phase is selected
+        const retries = getRetries(phase);
+        const duration = getDuration(phase);
+        const theme = PHASE_THEME[phase] ?? PHASE_THEME.plan;
+        const icon = STATUS_ICON[status] ?? STATUS_ICON.pending;
         const isSelected = selectedPhase === phase;
-        const cardBorderClass = isSelected ? 'bg-accent/10 border-accent' : borderClass;
+        const isPending = status === "pending";
+
+        const cardCls = isSelected
+          ? `bg-accent/10 border-accent`
+          : isPending
+            ? `border-border`
+            : `${theme.bg} ${theme.border}`;
+
+        const labelCls = isPending ? "text-text-tertiary" : theme.text;
 
         return (
           <div
             key={phase}
-            onClick={() => onSelectPhase(selectedPhase === phase ? null : phase)}
-            className={`flex-1 rounded-lg border cursor-pointer transition-colors px-4 py-3 text-center ${cardBorderClass}`}
+            onClick={() =>
+              onSelectPhase(selectedPhase === phase ? null : phase)
+            }
+            className={`flex-1 rounded-lg border cursor-pointer transition-colors px-4 py-3 text-center ${cardCls}`}
           >
             <div className="flex items-center justify-center gap-1 mb-1">
-              <div className="text-xs uppercase tracking-wider font-bold">
-                {PHASE_LABELS[phase]}
-              </div>
-              {/* Retry badge if there are retries */}
-              {retryCount > 0 && (
-                <span className="text-[10px] px-1 rounded bg-status-running/20 text-status-running">
-                  ×{retryCount + 1}
+              <span
+                className={`text-xs uppercase tracking-wider font-bold ${labelCls}`}
+              >
+                {PHASE_LABELS[phase as PipelinePhase]}
+              </span>
+              {retries > 0 && (
+                <span
+                  className={`text-[10px] px-1 rounded ${theme.badgeBg} ${theme.text}`}
+                >
+                  x{retries + 1}
                 </span>
               )}
             </div>
-            {icon}
-            <div className="text-xs text-text-tertiary">
-              {duration}
-            </div>
+            <div className={`text-2xl my-1 ${icon.cls}`}>{icon.char}</div>
+            <div className="text-xs text-text-tertiary">{duration}</div>
           </div>
         );
       })}

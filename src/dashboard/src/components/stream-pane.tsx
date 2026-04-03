@@ -85,14 +85,14 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
   return (
     <div className="flex-1 h-full flex flex-col bg-bg overflow-hidden">
       {/* ZONE 1 — Compact header (shrink-0, border-b border-border, px-4 py-3) */}
-      <div className="shrink-0 border-b border-border px-4 py-3">
+      <div className="shrink-0 border-b border-border px-6 py-3">
         {task ? (
           <>
             <div className="flex items-center justify-between">
               <h2 className="text-text-primary font-medium text-sm truncate">
                 {task.description.slice(0, 80)}
               </h2>
-              <button 
+              <button
                 onClick={() => setShowPrompt(true)}
                 className="text-accent text-xs cursor-pointer hover:underline shrink-0 ml-3"
               >
@@ -129,7 +129,7 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
 
       {/* ZONE 2 — Pipeline cards (only if isPipeline) */}
       {isPipeline && (
-        <PipelineCards 
+        <PipelineCards
           events={events}
           selectedPhase={selectedPhase}
           onSelectPhase={setSelectedPhase}
@@ -165,9 +165,9 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
 
       {/* Prompt modal */}
       {showPrompt && task && (
-        <PromptModal 
-          prompt={task.description} 
-          onClose={() => setShowPrompt(false)} 
+        <PromptModal
+          prompt={task.description}
+          onClose={() => setShowPrompt(false)}
         />
       )}
     </div>
