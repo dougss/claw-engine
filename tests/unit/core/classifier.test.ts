@@ -26,16 +26,18 @@ describe("classifyTask", () => {
     vi.unstubAllGlobals();
   });
 
-  it('returns "simple" when model responds with "simple"', async () => {
-    vi.stubGlobal("fetch", mockFetch("simple"));
-    expect(await classifyTask("rename a variable", opts)).toBe("simple");
+  it('returns "simple" complexity when model responds with "simple"', async () => {
+    vi.stubGlobal("fetch", mockFetch('{"complexity": "simple", "title": "rename a variable"}'));
+    const result = await classifyTask("rename a variable", opts);
+    expect(result.complexity).toBe("simple");
+    expect(result.title).toBe("rename a variable");
   });
 
-  it('returns "complex" when model responds with "complex"', async () => {
-    vi.stubGlobal("fetch", mockFetch("complex"));
-    expect(await classifyTask("refactor auth architecture", opts)).toBe(
-      "complex",
-    );
+  it('returns "complex" complexity when model responds with "complex"', async () => {
+    vi.stubGlobal("fetch", mockFetch('{"complexity": "complex", "title": "refactor auth architecture"}'));
+    const result = await classifyTask("refactor auth architecture", opts);
+    expect(result.complexity).toBe("complex");
+    expect(result.title).toBe("refactor auth architecture");
   });
 
   it('returns "medium" when model responds with "medium"', async () => {
