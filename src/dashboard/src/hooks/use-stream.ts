@@ -86,3 +86,49 @@ export const useStream = (
 
   return { events, isLive };
 };
+
+export function getPhaseTimeWindows(
+  events: StreamEvent[],
+): Map<string, { start: number; end: number }> {
+  const windows = new Map<string, { start: number; end: number }>();
+
+  // Find all phase_start events first
+  for (const event of events) {
+    if (event.type === "phase_start" && event.data.phase) {
+      const phase = event.data.phase as string;
+      windows.set(phase, { start: event.timestamp, end: Infinity });
+    }
+  }
+
+  // Then update with phase_end events
+  for (const event of events) {
+    if (event.type === "phase_end" && event.data.phase) {
+      const phase = event.data.phase as string;
+      const window = windows.get(phase);
+      if (window) {
+        windows.set(phase, { ...window, end: event.timestamp });
+      }
+    }
+  }
+
+  return windows;
+}
+
+export function filterEventsByPhase(
+  events: StreamEvent[],
+  phase: string | null,
+): StreamEvent[] {
+  if (!phase) return events; // "All" — no filtering
+  const windows = getPhaseTimeWindows(events);
+  const window = windows.get(phase);
+  if (!window) return [];
+
+  return events.filter((e) => {
+    // Include the phase_start/phase_end markers themselves
+    if (e.type === "phase_start" || e.type === "phase_end") {
+      return (e.data.phase as string) === phase;
+    }
+    // Include events within the time window
+    return e.timestamp >= window.start && e.timestamp <= window.end;
+  });
+}
