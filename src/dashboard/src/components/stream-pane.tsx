@@ -100,9 +100,21 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
                 </span>
               )}
             </div>
-            <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
-              {task.description}
-            </p>
+            {/* Main headline showing the first line of description */}
+            <h2 className="text-xl sm:text-2xl font-semibold text-text-primary leading-tight mb-2">
+              {task.description?.split('\n')[0]?.length > 90 
+                ? task.description.split('\n')[0].substring(0, 87) + '...' 
+                : task.description.split('\n')[0]}
+            </h2>
+            
+            {/* Scrollable section for full prompt if there's more content */}
+            {task.description.includes('\n') || task.description.length > 90 ? (
+              <div className="max-h-32 overflow-y-auto border border-border rounded-md p-2 bg-surface">
+                <p className="text-base sm:text-lg text-text-secondary whitespace-pre-wrap break-words">
+                  {task.description}
+                </p>
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="text-text-tertiary text-sm">
