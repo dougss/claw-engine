@@ -180,18 +180,22 @@ export function registerRunCommand(program: import("commander").Command) {
 
         // LLM-based classification — fast Qwen call (~50 tokens, 8s timeout).
         // Falls back to "medium" on error so it never blocks execution.
-        let complexity: "simple" | "medium" | "complex" = "medium";
+        let classificationResult: import("../../core/classifier.js").ClassificationResult = { 
+          complexity: "medium", 
+          title: prompt.slice(0, 60) // fallback title
+        };
         if (!opts.delegate) {
           const apiKey =
             process.env[config.providers.alibaba.api_key_env] ?? "";
           if (apiKey) {
-            complexity = await classifyTask(prompt, {
+            classificationResult = await classifyTask(prompt, {
               apiKey,
               baseUrl: config.providers.alibaba.base_url,
               model: config.models.default,
             });
           }
         }
+        const { complexity } = classificationResult;
 
         const route = routeTask(
           { complexity, description: prompt, fallbackChainPosition: 0 },
@@ -243,7 +247,7 @@ export function registerRunCommand(program: import("commander").Command) {
         try {
           db = getDb({ connectionString: connStr });
           const wi = await createWorkItem(db, {
-            title: prompt.slice(0, 120),
+            title: classificationResult.title,
             description: prompt,
             repos: [basename(repoPath)],
             source: "cli:run",

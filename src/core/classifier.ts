@@ -9,6 +9,11 @@
 
 export type TaskComplexity = "simple" | "medium" | "complex";
 
+export interface ClassificationResult {
+  complexity: TaskComplexity;
+  title: string;
+}
+
 export interface ClassifierOptions {
   apiKey: string;
   baseUrl: string;
@@ -16,9 +21,9 @@ export interface ClassifierOptions {
   timeoutMs?: number; // default: 8000
 }
 
-const CLASSIFICATION_PROMPT = `You are a task complexity classifier for a coding agent.
+const CLASSIFICATION_PROMPT = `You are a task complexity classifier and intent summarizer for a coding agent.
 
-Classify the following coding task as exactly one of: simple, medium, or complex.
+Classify the following coding task as exactly one of: simple, medium, or complex and provide a title summarizing the intent.
 
 Definitions:
 - simple: mechanical change, 1-2 files, no reasoning needed (add a field, fix a typo, rename a variable, update a constant, copy/move files, update documentation)
@@ -51,14 +56,14 @@ complex:
 When in doubt between medium and complex, choose medium.
 Most coding tasks are medium. complex must be rare: less than 10% of tasks.
 
-Reply with ONLY the single word: simple, medium, or complex. No explanation.
+Respond with JSON format: {"complexity": "simple|medium|complex", "title": "max 60 char title summarizing intent"}
 
 Task: `;
 
 export async function classifyTask(
   description: string,
   opts: ClassifierOptions,
-): Promise<TaskComplexity> {
+): Promise<ClassificationResult> {
   const timeoutMs = opts.timeoutMs ?? 8_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -79,25 +84,49 @@ export async function classifyTask(
             content: CLASSIFICATION_PROMPT + description,
           },
         ],
-        max_tokens: 5,
+        max_tokens: 100,
         temperature: 0,
         stream: false,
       }),
     });
 
-    if (!res.ok) return "medium";
+    if (!res.ok) return { complexity: "medium", title: description.slice(0, 60) };
 
     const data = (await res.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
 
-    const raw = data.choices?.[0]?.message?.content?.trim().toLowerCase() ?? "";
-    if (raw.startsWith("simple")) return "simple";
-    if (raw.startsWith("complex")) return "complex";
-    return "medium";
+    const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
+    
+    try {
+      // Try to parse as JSON first
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.complexity === 'string' && typeof parsed.title === 'string') {
+        return { 
+          complexity: parsed.complexity as TaskComplexity, 
+          title: parsed.title.slice(0, 60) // Ensure title is max 60 chars
+        };
+      }
+    } catch {
+      // If JSON parsing fails, try to extract complexity from plain text
+      const complexityMatch = raw.match(/\b(simple|medium|complex)\b/i);
+      const complexity = complexityMatch ? complexityMatch[0].toLowerCase() as TaskComplexity : "medium";
+      return { 
+        complexity, 
+        title: description.slice(0, 60) // Fallback to first 60 chars of prompt
+      };
+    }
+
+    // Fallback if parsing didn't work properly
+    const complexityMatch = raw.match(/\b(simple|medium|complex)\b/i);
+    const complexity = complexityMatch ? complexityMatch[0].toLowerCase() as TaskComplexity : "medium";
+    return { 
+      complexity, 
+      title: description.slice(0, 60) // Fallback to first 60 chars of prompt
+    };
   } catch {
-    // Timeout, network error, or parse failure — default to medium
-    return "medium";
+    // Timeout, network error, or parse failure — default to medium with description slice
+    return { complexity: "medium", title: description.slice(0, 60) };
   } finally {
     clearTimeout(timer);
   }

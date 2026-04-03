@@ -47,6 +47,7 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
 
   switch (type) {
     case "heartbeat":
+    case "unknown":
       return null;
 
     case "tool_use": {
@@ -54,15 +55,15 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
       const preview = formatToolInput(data.input);
 
       return (
-        <div className="bg-surface-2 border-l-4 border-accent rounded-r px-3 py-2 mx-2 my-1">
+        <div className="py-2 px-4">
           <div className="flex justify-between items-center">
             <span className="text-accent font-mono font-bold text-sm">{name}</span>
-            <span className="text-text-tertiary text-xs font-mono">
+            <span className="text-text-tertiary text-xs font-mono ml-auto">
               {formatTime(now, timestamp)}
             </span>
           </div>
           {preview && (
-            <div className="text-text-secondary font-mono text-xs mt-0.5">
+            <div className="text-text-secondary font-mono text-xs">
               {preview}
             </div>
           )}
@@ -75,10 +76,11 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
       if (!text.trim()) return null;
 
       return (
-        <div className="border-l border-border px-3 py-1.5 mx-2 my-1">
-          <div className="text-sm text-text-primary leading-relaxed whitespace-pre-wrap">
+        <div className="py-1 px-4">
+          <span className="text-text-tertiary">{'> '}</span>
+          <span className="text-text-secondary text-sm">
             {text}
-          </div>
+          </span>
         </div>
       );
     }
@@ -86,14 +88,14 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
     case "token_update": {
       // Only render if percent changed by >=5 since last
       const percent = data.percent as number | undefined;
-      if (typeof percent !== "number") return null;
+      if (typeof percent !== "number" || percent < 5) return null;
 
       const used = (data.used as number) || 0;
       const budget = (data.budget as number) || 0;
 
       return (
-        <div className="text-center my-1">
-          <span className="inline-block text-stream-token font-mono text-xs opacity-60">
+        <div className="py-1 text-center">
+          <span className="text-stream-token font-mono text-xs opacity-60">
             ⬡ {Math.round(percent)}% — {formatTokens(used)} / {formatTokens(budget)}
           </span>
         </div>
@@ -110,21 +112,21 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
       let icon = '';
 
       if (isSuccess) {
-        bgClass = 'bg-status-completed/10 border-status-completed/20';
+        bgClass = 'bg-status-completed/10 border-status-completed';
         textClass = 'text-status-completed';
         icon = '✓';
       } else if (isFailed) {
-        bgClass = 'bg-status-failed/10 border-status-failed/20';
+        bgClass = 'bg-status-failed/10 border-status-failed';
         textClass = 'text-status-failed';
         icon = '✗';
       } else {
-        bgClass = 'bg-status-running/10 border-status-running/20';
+        bgClass = 'bg-status-running/10 border-status-running';
         textClass = 'text-status-running';
         icon = '⏹';
       }
 
       return (
-        <div className={`mx-2 my-2 px-4 py-3 rounded border ${bgClass}`}>
+        <div className={`mx-4 my-3 px-4 py-3 rounded border ${bgClass}`}>
           <span className={`text-sm font-medium ${textClass}`}>
             {icon} Session {reason}
           </span>
@@ -138,44 +140,35 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
       const complexity = (data.complexity as string) || "";
 
       return (
-        <div className="px-4 py-1 mx-2">
-          <span className="text-text-tertiary text-xs">
-            → {mode} · {complexity} · {reason}
-          </span>
+        <div className="py-1 px-4 text-text-tertiary text-xs">
+          <span>{'→ ' + mode + ' · ' + complexity + ' · ' + reason}</span>
         </div>
       );
     }
 
     case "phase_start": {
-      const phase = ((data.phase as string) || "");
+      const phaseLabel = ((data.phase as string) || "");
       const attempt = data.attempt as number | undefined;
 
       return (
-        <div className="bg-accent/10 border-y border-accent/20 px-4 py-2 mt-3">
-          <div className="flex items-center justify-between">
-            <span className="text-accent font-bold text-xs uppercase tracking-wider">
-              {phase}
-            </span>
-            {attempt && attempt > 1 && (
-              <span className="text-accent/70 text-xs">
-                ×{attempt}
-              </span>
-            )}
-          </div>
+        <div className="mt-3 py-1.5 px-4 border-t border-accent/20">
+          <span className="text-accent text-xs font-bold uppercase tracking-wider">
+            {phaseLabel}
+            {attempt && attempt > 1 && <span> ×{attempt}</span>}
+          </span>
         </div>
       );
     }
 
     case "phase_end": {
-      const phase = ((data.phase as string) || "").toUpperCase();
       const success = data.success !== false;
       const durationMs = data.durationMs as number | undefined;
       const duration = durationMs !== undefined ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
 
       return (
-        <div className="px-4 py-1 mx-2 mb-2">
-          <span className={`text-xs font-medium ${success ? "text-status-completed" : "text-status-failed"}`}>
-            {success ? "✓" : "✗"} {phase}{success ? ` completed${duration}` : " failed"}
+        <div className="py-1 px-4">
+          <span className={`font-medium ${success ? "text-status-completed" : "text-status-failed"}`}>
+            {success ? "✓" : "✗"} PHASE {success ? `COMPLETED${duration}` : "FAILED"}
           </span>
         </div>
       );

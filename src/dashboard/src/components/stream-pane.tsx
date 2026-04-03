@@ -2,7 +2,7 @@ import { useRef, useEffect, useState } from "react";
 import { type StreamEvent } from "../hooks/use-stream";
 import { type TaskFull } from "../lib/api";
 import { StreamEventComponent } from "./stream-event";
-import { StepsBar } from "./phase-bar";
+import { PipelineCards } from "./phase-bar";
 import { filterEventsByPhase } from "../hooks/use-stream";
 
 interface StreamPaneProps {
@@ -119,9 +119,9 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
         )}
       </div>
 
-      {/* Zone 2: Steps Bar (only if isPipeline) */}
+      {/* Zone 2: Pipeline Cards (only if isPipeline) */}
       {isPipeline && (
-        <StepsBar 
+        <PipelineCards 
           events={events}
           selectedPhase={selectedPhase}
           onSelectPhase={setSelectedPhase}
