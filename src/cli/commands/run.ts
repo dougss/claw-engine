@@ -47,9 +47,13 @@ export function registerRunCommand(program: import("commander").Command) {
         ? `claw: ${prompt.substring(0, 72)}`
         : `claw: ${prompt}`;
 
-    execSync(`git -C "${repoPath}" commit -m "${commitMessage}"`, {
-      stdio: "inherit",
-    });
+    const author = "Claw Engine <claw-engine[bot]@users.noreply.github.com>";
+    execSync(
+      `git -C "${repoPath}" commit --author="${author}" -m "${commitMessage}"`,
+      {
+        stdio: "inherit",
+      },
+    );
     console.log("[git] committed changes");
   }
   program

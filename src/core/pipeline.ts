@@ -35,7 +35,7 @@ export interface PipelineContext {
   githubPrivateKeyPath?: string;
   /** GitHub bot user ID — used to build the noreply commit email (e.g. 12345+claw-engine[bot]@...). */
   githubBotUserId?: string;
-  maxReviewRetries?: number;  // default 1
+  maxReviewRetries?: number; // default 1
   defaultBranch?: string;
 }
 
@@ -61,8 +61,10 @@ function gitExecSyncOptions(repoPath: string) {
 function resolveDefaultBranch(repoPath: string): string {
   const opts = gitExecSyncOptions(repoPath);
   try {
-    const sym = execSync("git symbolic-ref refs/remotes/origin/HEAD", opts)
-      .trim();
+    const sym = execSync(
+      "git symbolic-ref refs/remotes/origin/HEAD",
+      opts,
+    ).trim();
     const last = sym.split("/").pop();
     if (last && last !== "HEAD") return last;
   } catch {}
@@ -81,7 +83,7 @@ function gitCommitAndPush(repoPath: string, prompt: string): string {
   const opts = gitExecSyncOptions(repoPath);
 
   const status = execSync("git status --porcelain", opts).trim();
-  if (!status) throw new Error('nothing to commit — working tree is clean');
+  if (!status) throw new Error("nothing to commit — working tree is clean");
 
   const currentBranch = execSync(
     "git rev-parse --abbrev-ref HEAD",
@@ -100,7 +102,8 @@ function gitCommitAndPush(repoPath: string, prompt: string): string {
   execSync("git add -A", opts);
   const msg =
     prompt.length > 72 ? `claw: ${prompt.slice(0, 72)}` : `claw: ${prompt}`;
-  execSync(`git commit -m ${JSON.stringify(msg)}`, opts);
+  const author = "Claw Engine <claw-engine[bot]@users.noreply.github.com>";
+  execSync(`git commit --author="${author}" -m ${JSON.stringify(msg)}`, opts);
   execSync("git push origin HEAD", opts);
 
   return branch;
@@ -404,30 +407,31 @@ export async function prPhase({
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 
-function parseReviewVerdict(review: string): 'APPROVE' | 'REQUEST_CHANGES' {
+function parseReviewVerdict(review: string): "APPROVE" | "REQUEST_CHANGES" {
   const upper = review.toUpperCase();
   // Look for explicit APPROVE anywhere — check APPROVE before REQUEST_CHANGES
   // to avoid false-match on \"not APPROVE\"
-  if (upper.includes('VERDICT') && upper.includes('REQUEST_CHANGES')) {
-    return 'REQUEST_CHANGES';
+  if (upper.includes("VERDICT") && upper.includes("REQUEST_CHANGES")) {
+    return "REQUEST_CHANGES";
   }
-  if (upper.includes('VERDICT') && upper.includes('APPROVE')) {
-    return 'APPROVE';
+  if (upper.includes("VERDICT") && upper.includes("APPROVE")) {
+    return "APPROVE";
   }
   // Fallback: last line heuristic
-  const lastLines = review.trim().split('\n').slice(-5).join(' ').toUpperCase();
-  if (lastLines.includes('REQUEST_CHANGES')) return 'REQUEST_CHANGES';
-  return 'APPROVE'; // default to approve if unclear
+  const lastLines = review.trim().split("\n").slice(-5).join(" ").toUpperCase();
+  if (lastLines.includes("REQUEST_CHANGES")) return "REQUEST_CHANGES";
+  return "APPROVE"; // default to approve if unclear
 }
 
 function getDefaultBranch(repoPath: string): string {
   try {
-    const ref = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
-      cwd: repoPath, encoding: 'utf-8'
+    const ref = execSync("git symbolic-ref refs/remotes/origin/HEAD", {
+      cwd: repoPath,
+      encoding: "utf-8",
     }).trim();
-    return ref.replace('refs/remotes/origin/', '');
+    return ref.replace("refs/remotes/origin/", "");
   } catch {
-    return 'main'; // fallback
+    return "main"; // fallback
   }
 }
 
@@ -547,10 +551,17 @@ export async function runPipeline(
   }
 
   if (!executeSuccess) {
-    return { plan, executeSuccess: false, validation, review: "", prUrl: null, reviewPassed: false };
+    return {
+      plan,
+      executeSuccess: false,
+      validation,
+      review: "",
+      prUrl: null,
+      reviewPassed: false,
+    };
   }
 
-  let review = '';
+  let review = "";
   let prUrl: string | null = null;
   let reviewPassed = false;
   let reviewAttempt = 0;
@@ -569,13 +580,15 @@ export async function runPipeline(
 
     const verdict = parseReviewVerdict(review);
 
-    if (verdict === 'APPROVE' || reviewAttempt > maxReviewRetries) {
-      reviewPassed = verdict === 'APPROVE';
+    if (verdict === "APPROVE" || reviewAttempt > maxReviewRetries) {
+      reviewPassed = verdict === "APPROVE";
       break;
     }
 
     // REQUEST_CHANGES — loop back: execute to fix, then validate
-    console.log(`[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`);
+    console.log(
+      `[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`,
+    );
 
     await executePhase({
       repoPath,
@@ -598,7 +611,14 @@ export async function runPipeline(
 
     if (!fixValidation.passed) {
       // Validation failed after review fix — abort
-      return { plan, executeSuccess: false, validation: fixValidation, review, prUrl: null, reviewPassed: false };
+      return {
+        plan,
+        executeSuccess: false,
+        validation: fixValidation,
+        review,
+        prUrl: null,
+        reviewPassed: false,
+      };
     }
   }
 
@@ -608,9 +628,16 @@ export async function runPipeline(
     try {
       prBranch = gitCommitAndPush(repoPath, prompt);
     } catch (err: any) {
-      if (err.message.includes('nothing to commit')) {
-        console.log('[pipeline] nothing to commit, skipping PR');
-        return { plan, executeSuccess: true, validation, review, prUrl: null, reviewPassed };
+      if (err.message.includes("nothing to commit")) {
+        console.log("[pipeline] nothing to commit, skipping PR");
+        return {
+          plan,
+          executeSuccess: true,
+          validation,
+          review,
+          prUrl: null,
+          reviewPassed,
+        };
       }
       throw new Error(`Failed to commit/push for PR: ${err.message}`);
     }
@@ -629,5 +656,12 @@ export async function runPipeline(
     baseBranch: prBase,
   });
 
-  return { plan, executeSuccess: true, validation, review, prUrl, reviewPassed };
+  return {
+    plan,
+    executeSuccess: true,
+    validation,
+    review,
+    prUrl,
+    reviewPassed,
+  };
 }
