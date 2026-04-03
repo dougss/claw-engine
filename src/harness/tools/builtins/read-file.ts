@@ -8,6 +8,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const readFileTool: ToolHandler = {
   name: "read_file",
+  isConcurrencySafe: true,
   description:
     'Read a text file. Example: {"path": "src/foo.ts"} or {"path": "src/foo.ts", "offset": 10, "limit": 50}',
   inputSchema: {

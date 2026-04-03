@@ -13,5 +13,7 @@ export interface ToolHandler {
   inputSchema: Record<string, unknown>;
   /** Optional max size for tool result output in characters. Defaults applied in agent-loop. */
   maxResultSizeChars?: number;
+  /** When true, this tool is safe to execute concurrently with other safe tools. Defaults to false. */
+  isConcurrencySafe?: boolean;
   execute: (input: unknown, context: ToolContext) => Promise<ToolResult>;
 }

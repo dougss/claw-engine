@@ -11,6 +11,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const grepTool: ToolHandler = {
   name: "grep",
+  isConcurrencySafe: true,
   description: "Search text using ripgrep",
   inputSchema: {
     type: "object",

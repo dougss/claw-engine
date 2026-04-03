@@ -7,6 +7,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const globTool: ToolHandler = {
   name: "glob",
+  isConcurrencySafe: true,
   description: "Find files by glob pattern",
   inputSchema: {
     type: "object",

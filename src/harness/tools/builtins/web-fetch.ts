@@ -28,6 +28,7 @@ function truncateUtf8({ text, maxBytes }: { text: string; maxBytes: number }) {
 
 export const webFetchTool: ToolHandler = {
   name: "web_fetch",
+  isConcurrencySafe: true,
   description: "Fetch a URL and return its contents as text",
   inputSchema: {
     type: "object",

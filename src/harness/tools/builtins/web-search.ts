@@ -33,6 +33,7 @@ function extractTopics(
 
 export const webSearchTool: ToolHandler = {
   name: "web_search",
+  isConcurrencySafe: true,
   description:
     "Search the web (DuckDuckGo Instant Answer API) and return a short text summary",
   inputSchema: {

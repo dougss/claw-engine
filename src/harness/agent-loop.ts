@@ -16,6 +16,7 @@ import {
 import { classifyError } from "../core/error-classifier.js";
 
 const FATAL_ERROR_CATEGORIES = new Set(["auth"]);
+const MAX_PARALLEL_TOOLS = 5;
 
 const SUMMARY_PROMPT =
   "You are approaching the context limit. Please summarize what you have accomplished so far and what still needs to be done, so work can resume seamlessly in a new session. Be concise.";
@@ -102,6 +103,23 @@ async function executeTool({
   return { ...result, output: truncateOutput(result.output, maxChars) };
 }
 
+type PendingBuiltin = {
+  id: string;
+  name: string;
+  kind: "builtin";
+  input: unknown;
+  handler: ToolHandler;
+};
+type PendingMcp = { id: string; name: string; kind: "mcp"; input: unknown };
+type PendingResolved = {
+  id: string;
+  name: string;
+  kind: "resolved";
+  output: string;
+  isError: boolean;
+};
+type PendingToolCall = PendingBuiltin | PendingMcp | PendingResolved;
+
 export async function* runAgentLoop({
   adapter,
   systemPrompt,
@@ -132,10 +150,13 @@ export async function* runAgentLoop({
     let assistantText = "";
     let highestPercent = 0;
 
-    // Collect tool calls and their results separately so we can push them to
-    // messages in the correct OpenAI order: [assistant (text+toolCalls), tool, tool, ...]
+    // Tool calls are collected during streaming, then executed in Phase 2.
+    // Order: [assistant (text+toolCalls), tool, tool, ...] (OpenAI wire format)
     const turnToolCalls: ToolCallRecord[] = [];
     const turnToolResults: Message[] = [];
+
+    // Phase 1: COLLECT — stream events, defer tool execution
+    const pendingToolCalls: PendingToolCall[] = [];
 
     try {
       for await (const event of adapter.chat(messages, tools)) {
@@ -156,7 +177,6 @@ export async function* runAgentLoop({
           everWrote = true;
         }
 
-        // Record the actual tool call with its real arguments for history
         turnToolCalls.push({
           id: event.id,
           name: event.name,
@@ -178,80 +198,43 @@ export async function* runAgentLoop({
             tool: event.name,
             reason: permission.reason,
           };
-
-          const denied = `Permission denied for tool "${event.name}": ${permission.reason}`;
-          yield {
-            type: "tool_result",
+          pendingToolCalls.push({
             id: event.id,
-            output: denied,
+            name: event.name,
+            kind: "resolved",
+            output: `Permission denied for tool "${event.name}": ${permission.reason}`,
             isError: true,
-          };
-          turnToolResults.push(
-            createToolMessage({
-              toolUseId: event.id,
-              toolName: event.name,
-              output: denied,
-            }),
-          );
+          });
           continue;
         }
 
         if (!handler) {
           if (mcpCallTool && isMcpTool(event.name)) {
-            const result = await mcpCallTool(event.name, event.input);
-            const truncatedOutput = truncateOutput(result.output, FALLBACK_MAX_RESULT_SIZE);
-            yield {
-              type: "tool_result",
+            pendingToolCalls.push({
               id: event.id,
-              output: truncatedOutput,
-              isError: result.isError,
-            };
-            turnToolResults.push(
-              createToolMessage({
-                toolUseId: event.id,
-                toolName: event.name,
-                output: truncatedOutput,
-              }),
-            );
-            continue;
+              name: event.name,
+              kind: "mcp",
+              input: event.input,
+            });
+          } else {
+            pendingToolCalls.push({
+              id: event.id,
+              name: event.name,
+              kind: "resolved",
+              output: `Tool not found: ${event.name}`,
+              isError: true,
+            });
           }
-
-          const notFound = `Tool not found: ${event.name}`;
-          yield {
-            type: "tool_result",
-            id: event.id,
-            output: notFound,
-            isError: true,
-          };
-          turnToolResults.push(
-            createToolMessage({
-              toolUseId: event.id,
-              toolName: event.name,
-              output: notFound,
-            }),
-          );
           continue;
         }
 
-        const result = await executeTool({
-          handler,
-          input: event.input,
-          context: { workspacePath, sessionId, workItemId },
-        });
-
-        yield {
-          type: "tool_result",
+        pendingToolCalls.push({
           id: event.id,
-          output: result.output,
-          isError: result.isError,
-        };
-        turnToolResults.push(
-          createToolMessage({
-            toolUseId: event.id,
-            toolName: event.name,
-            output: result.output,
-          }),
-        );
+          name: event.name,
+          kind: "builtin",
+          input: event.input,
+          handler,
+        });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -265,6 +248,112 @@ export async function* runAgentLoop({
       }
       // retryable (timeout, rate_limit, network) and others: let outer loop retry
       continue;
+    }
+
+    // Phase 2: EXECUTE — partition safe/unsafe, execute, yield results in original order
+    const resultMap = new Map<string, { output: string; isError: boolean }>();
+
+    const safeBatch = pendingToolCalls.filter(
+      (tc): tc is PendingBuiltin =>
+        tc.kind === "builtin" && (tc.handler.isConcurrencySafe ?? false),
+    );
+    const safeIds = new Set(safeBatch.map(tc => tc.id));
+    const unsafeBatch = pendingToolCalls.filter(
+      (tc) => !safeIds.has(tc.id),
+    );
+
+    // Run concurrency-safe tools in parallel, capped at MAX_PARALLEL_TOOLS per chunk
+    for (let j = 0; j < safeBatch.length; j += MAX_PARALLEL_TOOLS) {
+      const chunk = safeBatch.slice(j, j + MAX_PARALLEL_TOOLS);
+      const results = await Promise.allSettled(
+        chunk.map(async (tc) => {
+          const result = await executeTool({
+            handler: tc.handler,
+            input: tc.input,
+            context: { workspacePath, sessionId, workItemId },
+          });
+          return { id: tc.id, output: result.output, isError: result.isError };
+        })
+      );
+      
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const tc = chunk[i];
+        
+        if (result.status === 'fulfilled') {
+          resultMap.set(tc.id, { output: result.value.output, isError: result.value.isError });
+        } else {
+          resultMap.set(tc.id, { 
+            output: `Error executing tool: ${result.reason instanceof Error ? result.reason.message : 'Unknown error'}`, 
+            isError: true 
+          });
+        }
+      }
+    }
+
+    // Run remaining tools sequentially (unsafe builtins, MCP, pre-resolved)
+    for (const tc of unsafeBatch) {
+      let output: string;
+      let isError: boolean;
+
+      if (tc.kind === "resolved") {
+        output = tc.output;
+        isError = tc.isError;
+      } else if (tc.kind === "mcp") {
+        if (!mcpCallTool) {
+          output = `Error: MCP tool "${tc.name}" called but no mcpCallTool handler provided`;
+          isError = true;
+        } else {
+          const result = await mcpCallTool(tc.name, tc.input);
+          output = truncateOutput(result.output, FALLBACK_MAX_RESULT_SIZE);
+          isError = result.isError;
+        }
+      } else {
+        // builtin, not concurrency-safe
+        const result = await executeTool({
+          handler: tc.handler,
+          input: tc.input,
+          context: { workspacePath, sessionId, workItemId },
+        });
+        output = result.output;
+        isError = result.isError;
+      }
+
+      resultMap.set(tc.id, { output, isError });
+    }
+
+    // Yield tool_result events and build turnToolResults in original tool_use order
+    for (const tc of pendingToolCalls) {
+      const result = resultMap.get(tc.id);
+      if (!result) {
+        yield {
+          type: "tool_result",
+          id: tc.id,
+          output: `Error: Tool result not found for tool ${tc.id}`,
+          isError: true,
+        };
+        turnToolResults.push(
+          createToolMessage({
+            toolUseId: tc.id,
+            toolName: tc.name,
+            output: `Error: Tool result not found for tool ${tc.id}`,
+          }),
+        );
+        continue;
+      }
+      yield {
+        type: "tool_result",
+        id: tc.id,
+        output: result.output,
+        isError: result.isError,
+      };
+      turnToolResults.push(
+        createToolMessage({
+          toolUseId: tc.id,
+          toolName: tc.name,
+          output: result.output,
+        }),
+      );
     }
 
     // Push messages in correct OpenAI order:

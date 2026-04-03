@@ -102,6 +102,7 @@ export const taskCreateTool: ToolHandler = {
 
 export const taskListTool: ToolHandler = {
   name: "task_list",
+  isConcurrencySafe: true,
   description: "List tasks. Input: { status?: string }",
   inputSchema: {
     type: "object",
@@ -237,6 +238,7 @@ export const taskUpdateTool: ToolHandler = {
 
 export const taskGetTool: ToolHandler = {
   name: "task_get",
+  isConcurrencySafe: true,
   description: "Get a task by ID. Input: { id: string }",
   inputSchema: {
     type: "object",
