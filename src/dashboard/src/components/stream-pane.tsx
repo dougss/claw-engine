@@ -77,32 +77,32 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
   return (
     <div className="flex-1 h-full flex flex-col bg-bg">
       {/* Top bar */}
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-border">
         {task ? (
           <>
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              <h2 className="text-text-primary text-sm font-medium truncate min-w-0 flex-1">
-                {task.description}
-              </h2>
+            <div className="flex items-center gap-2 mb-2">
               <span
-                className={`text-xs px-2 py-0.5 rounded-full ${getStatusClass(task.status)}`}
+                className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${getStatusClass(task.status)}`}
               >
                 {task.status}
               </span>
-              <span className="text-text-tertiary text-xs">
+              {task.model && (
+                <span className="text-xs font-mono text-text-tertiary bg-surface-2 px-1.5 py-0.5 rounded shrink-0">
+                  {task.model}
+                </span>
+              )}
+              <span className="text-text-tertiary text-xs shrink-0">
                 {getDuration()}
               </span>
               {isLive && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30">
+                <span className="text-xs px-2 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30 shrink-0">
                   LIVE
                 </span>
               )}
             </div>
-            {task.model && (
-              <span className="text-xs font-mono text-text-tertiary bg-surface-2 px-1.5 py-0.5 rounded">
-                {task.model}
-              </span>
-            )}
+            <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+              {task.description}
+            </p>
           </>
         ) : (
           <div className="text-text-tertiary text-sm">

@@ -10,7 +10,11 @@ type EventHandler = (event: SseEvent) => void;
 
 const RECONNECT_DELAY_MS = 3000;
 
-export function createSseClient(onEvent: EventHandler): () => void {
+export function createSseClient(
+  onEvent: EventHandler,
+  onConnected?: () => void,
+  onDisconnected?: () => void,
+): () => void {
   let lastEventId = "";
   let es: EventSource | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -35,6 +39,10 @@ export function createSseClient(onEvent: EventHandler): () => void {
       : `/api/v1/events`;
 
     es = new EventSource(url);
+
+    es.onopen = () => {
+      onConnected?.();
+    };
 
     // Server sends named events (event: <type>), not unnamed messages.
     // onmessage only fires for unnamed events, so we must addEventListener
@@ -80,6 +88,7 @@ export function createSseClient(onEvent: EventHandler): () => void {
     }
 
     es.onerror = () => {
+      onDisconnected?.();
       es?.close();
       es = null;
       if (!closed) {

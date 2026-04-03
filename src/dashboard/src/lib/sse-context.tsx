@@ -24,15 +24,14 @@ export function SseProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    // Track connection state through the SSE client
-    const cleanup = createSseClient((event) => {
-      // Successfully received an event means we're connected
-      setConnected(true);
-      subs.current.forEach((fn) => fn(event));
-    });
-
-    // When we set up the SSE client, we assume we're attempting to connect
-    setConnected(false);
+    const cleanup = createSseClient(
+      (event) => {
+        subs.current.forEach((fn) => fn(event));
+      },
+      // onConnected / onDisconnected callbacks
+      () => setConnected(true),
+      () => setConnected(false),
+    );
 
     return cleanup;
   }, []);
@@ -62,7 +61,7 @@ export function useSseSubscription(handler: Handler): void {
 export function useSseContext() {
   const context = useContext(SseContext);
   if (!context) {
-    throw new Error('useSseContext must be used within an SseProvider');
+    throw new Error("useSseContext must be used within an SseProvider");
   }
   return { connected: context.connected };
 }
