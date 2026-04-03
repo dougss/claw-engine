@@ -414,6 +414,13 @@ export function registerRunCommand(program: import("commander").Command) {
 
               if (event.type === "text_delta") {
                 process.stdout.write(event.text);
+                if (db && taskId) {
+                  void insertTelemetryEvent(db, {
+                    taskId,
+                    eventType: "text_delta",
+                    payload: { text: event.text },
+                  }).catch(() => {});
+                }
               } else if (event.type === "tool_use") {
                 const input = JSON.stringify(event.input ?? {});
                 const preview =

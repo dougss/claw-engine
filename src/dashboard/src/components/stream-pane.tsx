@@ -3,13 +3,7 @@ import { type StreamEvent } from "../hooks/use-stream";
 import { type TaskFull } from "../lib/api";
 import { StreamEventComponent } from "./stream-event";
 import { StepsBar } from "./phase-bar";
-
-// Helper function to check if events come from a pipeline run
-function isPipelineRunFromEvents(events: StreamEvent[]): boolean {
-  return events.some(
-    (event) => event.type === "phase_start" || event.type === "phase_end",
-  );
-}
+import { filterEventsByPhase } from "../hooks/use-stream";
 
 interface StreamPaneProps {
   task: TaskFull | null;
@@ -18,30 +12,14 @@ interface StreamPaneProps {
 }
 
 export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
+  const [selectedPhase, setSelectedPhase] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  // Handle auto-scroll behavior
+  // Reset selectedPhase when task changes
   useEffect(() => {
-    if (!scrollRef.current || !autoScroll) return;
-
-    // Scroll to bottom when new events arrive
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [events, autoScroll]);
-
-  // Handle manual scrolling - pause auto-scroll when user scrolls away from bottom
-  const handleScroll = () => {
-    if (!scrollRef.current) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    const atBottom = scrollHeight - scrollTop - clientHeight < 50; // 50px threshold
-
-    if (atBottom) {
-      setAutoScroll(true);
-    } else {
-      setAutoScroll(false);
-    }
-  };
+    setSelectedPhase(null);
+  }, [task?.id]);
 
   // Calculate duration if task has started
   const getDuration = () => {
@@ -74,13 +52,41 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
     }
   };
 
+  // Compute if pipeline run and filtered events
+  const isPipeline = events.some(
+    (e) => e.type === "phase_start" || e.type === "phase_end",
+  );
+  const filteredEvents = filterEventsByPhase(events, selectedPhase);
+
+  // Handle auto-scroll behavior
+  useEffect(() => {
+    if (!scrollRef.current || !autoScroll) return;
+
+    // Scroll to bottom when new events arrive
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [filteredEvents, autoScroll]); // Changed to filteredEvents
+
+  // Handle manual scrolling - pause auto-scroll when user scrolls away from bottom
+  const handleScroll = () => {
+    if (!scrollRef.current) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    const atBottom = scrollHeight - scrollTop - clientHeight < 50; // 50px threshold
+
+    if (atBottom) {
+      setAutoScroll(true);
+    } else {
+      setAutoScroll(false);
+    }
+  };
+
   return (
-    <div className="flex-1 h-full flex flex-col bg-bg">
-      {/* Top region - 30% height for task metadata and prompt */}
-      <div className="h-[30%] max-h-[30%] shrink-0 flex flex-col overflow-hidden border-b border-border px-4 py-3">
+    <div className="flex-1 h-full flex flex-col bg-bg overflow-hidden">
+      {/* Zone 1: Prompt Card */}
+      <div className="max-h-[15vh] shrink-0 overflow-hidden border-b border-border px-4 py-3">
         {task ? (
           <>
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center gap-2">
               <span
                 className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${getStatusClass(task.status)}`}
               >
@@ -100,8 +106,8 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
                 </span>
               )}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto rounded-md border border-border bg-surface-2/40 px-3 py-3">
-              <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap break-words">
+            <div className="overflow-y-auto bg-surface-2/40 rounded border border-border px-3 py-2 mt-2">
+              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-text-primary">
                 {task.description}
               </p>
             </div>
@@ -113,43 +119,40 @@ export const StreamPane = ({ task, events, isLive }: StreamPaneProps) => {
         )}
       </div>
 
-      {/* Bottom region - 70% height for phase bar and stream events */}
-      <div className="flex-1 min-h-0 flex flex-col">
-        {/* Phase bar for pipeline runs */}
-        {task && isPipelineRunFromEvents(events) && events.length > 0 && (
-          <StepsBar 
-            events={events} 
-            selectedPhase={null} 
-            onSelectPhase={() => {}} 
-          />
-        )}
+      {/* Zone 2: Steps Bar (only if isPipeline) */}
+      {isPipeline && (
+        <StepsBar 
+          events={events}
+          selectedPhase={selectedPhase}
+          onSelectPhase={setSelectedPhase}
+        />
+      )}
 
-        {/* Stream area - unchanged */}
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="flex-1 overflow-y-auto"
-        >
-          {events.length > 0 ? (
-            <div className="divide-y divide-border/30">
-              {events.map((event, index) => (
-                <StreamEventComponent
-                  key={`${event.id}-${index}`}
-                  event={event}
-                  now={Date.now()}
-                />
-              ))}
-            </div>
-          ) : task ? (
-            <div className="p-4 text-text-tertiary text-center text-sm">
-              No events to display yet...
-            </div>
+      {/* Zone 3: Log Viewer */}
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 overflow-y-auto"
+      >
+        {task ? (
+          filteredEvents.length > 0 ? (
+            filteredEvents.map((event, index) => (
+              <StreamEventComponent
+                key={`${event.id}-${index}`}
+                event={event}
+                now={Date.now()}
+              />
+            ))
           ) : (
             <div className="p-4 text-text-tertiary text-center text-sm">
-              Select a task to view its output
+              Waiting for events...
             </div>
-          )}
-        </div>
+          )
+        ) : (
+          <div className="p-4 text-text-tertiary text-center text-sm">
+            Select a task to view its output
+          </div>
+        )}
       </div>
     </div>
   );
