@@ -102,8 +102,7 @@ function gitCommitAndPush(repoPath: string, prompt: string): string {
   execSync("git add -A", opts);
   const msg =
     prompt.length > 72 ? `claw: ${prompt.slice(0, 72)}` : `claw: ${prompt}`;
-  const author = "Claw Engine <claw-engine[bot]@users.noreply.github.com>";
-  execSync(`git commit --author="${author}" -m ${JSON.stringify(msg)}`, opts);
+  execSync(`git commit -m ${JSON.stringify(msg)}`, opts);
   execSync("git push origin HEAD", opts);
 
   return branch;
