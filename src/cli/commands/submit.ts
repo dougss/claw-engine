@@ -94,7 +94,7 @@ export function registerSubmitCommand(program: import("commander").Command) {
 
         // Determine provider queue: complex → anthropic, else alibaba
         const provider = complexity === "complex" ? "anthropic" : "alibaba";
-        const queueName = `claw:${provider}`;
+        const queueName = `claw-${provider}`;
 
         // Enqueue directly — no workers created here (daemon owns the workers)
         const queue = new Queue<TaskJobData>(queueName, {

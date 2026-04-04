@@ -57,7 +57,7 @@ export async function createScheduler(
 
   for (const provider of providerNames) {
     // Global queue names — must match the daemon workers in daemon.ts
-    const queueName = `claw:${provider}`;
+    const queueName = `claw-${provider}`;
     const limiter = rateLimits[provider];
     const queue = new Queue<TaskJobData>(queueName, {
       connection: redis,
