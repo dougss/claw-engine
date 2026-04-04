@@ -82,18 +82,22 @@ export function registerSubmitCommand(program: import("commander").Command) {
         const branch = `claw/${slug}-${timestamp}`;
 
         // Create the task in DB first so we have the real UUID for the job payload
+        const provider = complexity === "complex" ? "anthropic" : "opencode";
+        const model =
+          provider === "opencode"
+            ? config.providers.opencode.default_model
+            : "claude-sonnet";
+
         const task = await createTask(db, {
           workItemId,
           repo,
           branch,
           description,
           complexity,
+          model,
           estimatedTokens: 1000,
           dagNodeId: `task-${workItemId}-0`,
         });
-
-        // Determine provider queue: complex → anthropic, else alibaba
-        const provider = complexity === "complex" ? "anthropic" : "opencode";
         const queueName = `claw-${provider}`;
 
         // Enqueue directly — no workers created here (daemon owns the workers)
