@@ -44,6 +44,8 @@ function formatToolInput(input: unknown): string {
 
 const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
   const { type, timestamp, data } = event;
+  // Hook must be top-level (React rules of hooks) — default expanded
+  const [isDiffExpanded, setIsDiffExpanded] = useState(true);
 
   switch (type) {
     case "heartbeat":
@@ -52,28 +54,28 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
 
     case "tool_use": {
       const name = (data.name as string) || "";
-      const input = data.input as Record<string, unknown> || {};
+      const input = (data.input as Record<string, unknown>) || {};
       const preview = formatToolInput(data.input);
-      
-      // Check if this is an edit or write tool
+
       const isEditTool = name === "edit" || name === "edit_file";
       const isWriteTool = name === "write" || name === "write_file";
-      
-      // State for collapsible diff (default collapsed for historical events, expanded for live)
-      const [isDiffExpanded, setIsDiffExpanded] = useState(!timestamp || timestamp > now - 5000); // Expanded if event is recent
-      
+
       // For edit tools, prepare diff lines
       let diffLines: string[] = [];
-      if (isEditTool && typeof input.oldString === "string" && typeof input.newString === "string") {
-        const oldLines = input.oldString.split('\n');
-        const newLines = input.newString.split('\n');
-        
+      if (
+        isEditTool &&
+        typeof input.oldString === "string" &&
+        typeof input.newString === "string"
+      ) {
+        const oldLines = input.oldString.split("\n");
+        const newLines = input.newString.split("\n");
+
         // Compare lines and generate diff
         const maxLines = Math.max(oldLines.length, newLines.length);
         for (let i = 0; i < maxLines; i++) {
           const oldLine = oldLines[i];
           const newLine = newLines[i];
-          
+
           if (oldLine !== undefined && newLine === undefined) {
             // Line removed
             diffLines.push(`- ${oldLine}`);
@@ -90,15 +92,17 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
           }
         }
       }
-      
+
       // For write tools, prepare content preview
       let contentPreview: string[] = [];
       if (isWriteTool && typeof input.content === "string") {
-        const lines = input.content.split('\n');
+        const lines = input.content.split("\n");
         const maxPreviewLines = 20;
-        contentPreview = lines.slice(0, maxPreviewLines).map(line => `+ ${line}`);
+        contentPreview = lines
+          .slice(0, maxPreviewLines)
+          .map((line) => `+ ${line}`);
         if (lines.length > maxPreviewLines) {
-          contentPreview.push('...');
+          contentPreview.push("...");
         }
       }
 
@@ -117,42 +121,60 @@ const StreamEventComponent: React.FC<StreamEventProps> = ({ event, now }) => {
               {preview}
             </div>
           )}
-          
+
           {/* Show diff/content preview for edit/write tools */}
-          {(isEditTool || isWriteTool) && ((isEditTool && diffLines.length > 0) || (isWriteTool && contentPreview.length > 0)) && (
-            <div className="mt-1">
-              <div 
-                className="text-text-tertiary text-xs cursor-pointer"
-                onClick={() => setIsDiffExpanded(!isDiffExpanded)}
-              >
-                {isEditTool 
-                  ? `Diff (${diffLines.length} lines)` 
-                  : `Content Preview (${contentPreview.length > 0 && contentPreview[contentPreview.length - 1] === '...' ? `${contentPreview.length - 1}+ lines` : `${contentPreview.length} lines`})`}
-              </div>
-              
-              {isDiffExpanded && (
-                <div className="max-h-48 overflow-y-auto bg-surface-2/40 rounded px-3 py-2 mt-1">
-                  {isEditTool ? (
-                    <pre className="font-mono text-xs whitespace-pre-wrap break-all">
-                      {diffLines.map((line, index) => (
-                        <div key={index} className={line.startsWith('- ') ? 'text-status-failed' : line.startsWith('+ ') ? 'text-status-completed' : ''}>
-                          {line}
-                        </div>
-                      ))}
-                    </pre>
-                  ) : (
-                    <pre className="font-mono text-xs whitespace-pre-wrap break-all">
-                      {contentPreview.map((line, index) => (
-                        <div key={index} className={line.startsWith('+ ') ? 'text-status-completed' : ''}>
-                          {line}
-                        </div>
-                      ))}
-                    </pre>
-                  )}
+          {(isEditTool || isWriteTool) &&
+            ((isEditTool && diffLines.length > 0) ||
+              (isWriteTool && contentPreview.length > 0)) && (
+              <div className="mt-1">
+                <div
+                  className="text-text-tertiary text-xs cursor-pointer"
+                  onClick={() => setIsDiffExpanded(!isDiffExpanded)}
+                >
+                  {isEditTool
+                    ? `Diff (${diffLines.length} lines)`
+                    : `Content Preview (${contentPreview.length > 0 && contentPreview[contentPreview.length - 1] === "..." ? `${contentPreview.length - 1}+ lines` : `${contentPreview.length} lines`})`}
                 </div>
-              )}
-            </div>
-          )}
+
+                {isDiffExpanded && (
+                  <div className="max-h-48 overflow-y-auto bg-surface-2/40 rounded px-3 py-2 mt-1">
+                    {isEditTool ? (
+                      <pre className="font-mono text-xs whitespace-pre-wrap break-all">
+                        {diffLines.map((line, index) => (
+                          <div
+                            key={index}
+                            className={
+                              line.startsWith("- ")
+                                ? "text-status-failed"
+                                : line.startsWith("+ ")
+                                  ? "text-status-completed"
+                                  : ""
+                            }
+                          >
+                            {line}
+                          </div>
+                        ))}
+                      </pre>
+                    ) : (
+                      <pre className="font-mono text-xs whitespace-pre-wrap break-all">
+                        {contentPreview.map((line, index) => (
+                          <div
+                            key={index}
+                            className={
+                              line.startsWith("+ ")
+                                ? "text-status-completed"
+                                : ""
+                            }
+                          >
+                            {line}
+                          </div>
+                        ))}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
         </div>
       );
     }
