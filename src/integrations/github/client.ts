@@ -25,10 +25,12 @@ export async function createPullRequest({
     title,
     "--body",
     body,
-    "--json",
-    "url,number",
   ]);
-  return JSON.parse(stdout) as { url: string; number: number };
+  // gh pr create outputs the PR URL on stdout
+  const url = stdout.trim();
+  const match = url.match(/\/pull\/(\d+)/);
+  const number = match ? parseInt(match[1], 10) : 0;
+  return { url, number };
 }
 
 export async function createBranch({
