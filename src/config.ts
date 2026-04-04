@@ -1,3 +1,5 @@
+// TODO: Add configuration validation and error handling
+
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parse } from "yaml";
