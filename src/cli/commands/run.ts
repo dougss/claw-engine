@@ -245,9 +245,12 @@ export function registerRunCommand(program: import("commander").Command) {
           redis = new Redis({
             host: config.redis.host,
             port: config.redis.port,
-            maxRetriesPerRequest: 1,
+            maxRetriesPerRequest: 0,
             lazyConnect: true,
+            enableOfflineQueue: false,
+            retryStrategy: () => null, // no reconnect attempts
           });
+          redis.on("error", () => {}); // suppress unhandled error events
           await redis.connect();
         } catch {
           redis = null; // SSE publishing is optional
