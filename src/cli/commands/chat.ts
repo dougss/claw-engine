@@ -7,7 +7,7 @@ export function registerChatCommand(program: import("commander").Command) {
     .description("Start an interactive chat session (default when no args)")
     .option("--repo <path>", "Target repo (default: cwd)")
     .option("--no-commit", "Skip automatic git commit of changes")
-    .option("--no-pipeline", "Disable pipeline on first turn")
+    .option("--pipeline", "Enable pipeline on first turn (plan→execute→review)")
     .option("--resume <id>", "Resume a previous session")
     .action(
       async (opts: {
@@ -23,7 +23,7 @@ export function registerChatCommand(program: import("commander").Command) {
           repoPath,
           config,
           noCommit: opts.commit === false,
-          noPipeline: opts.pipeline === false,
+          noPipeline: opts.pipeline !== true,
           resumeId: opts.resume,
         });
       },

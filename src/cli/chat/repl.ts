@@ -168,10 +168,14 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
             config,
           );
           session.provider = route.provider;
-          session.model = route.model;
+          // Use the configured default model for the provider, not the fallback chain placeholder
+          session.model =
+            route.provider === "opencode"
+              ? (config.providers.opencode.default_model ?? route.model)
+              : route.model;
           defaultComplexity = classification.complexity;
           defaultProvider = route.provider;
-          defaultModel = route.model;
+          defaultModel = session.model;
         } catch {
           // fallback to defaults
         }
