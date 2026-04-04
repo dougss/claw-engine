@@ -11,6 +11,7 @@ const ERROR_CLASSES = {
   rate_limit: /rate limit|429|too many requests/i,
   auth: /unauthorized|403|forbidden|invalid api key/i,
   network: /ECONNREFUSED|ECONNRESET|ENOTFOUND/i,
+  memory: /out of memory|heap|allocation failed/i,
 } as const;
 
 export function classifyError(error: string): string {

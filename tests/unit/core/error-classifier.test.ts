@@ -17,6 +17,12 @@ describe("classifyError", () => {
     expect(classifyError("rate limit exceeded 429")).toBe("rate_limit");
   });
 
+  it("classifies memory errors", () => {
+    expect(classifyError("out of memory error")).toBe("memory");
+    expect(classifyError("heap allocation failed")).toBe("memory");
+    expect(classifyError("allocation failed")).toBe("memory");
+  });
+
   it("classifies unknown errors", () => {
     expect(classifyError("some random error")).toBe("unknown");
   });
