@@ -73,10 +73,18 @@ export async function createWorktree({
 
   const worktreePath = join(worktreesDir, taskId);
 
-  await execFileAsync({
-    command: "git",
-    args: ["-C", repoPath, "worktree", "add", worktreePath, "-b", branch],
-  });
+  // Try checkout existing branch first, fall back to creating new branch
+  try {
+    await execFileAsync({
+      command: "git",
+      args: ["-C", repoPath, "worktree", "add", worktreePath, branch],
+    });
+  } catch {
+    await execFileAsync({
+      command: "git",
+      args: ["-C", repoPath, "worktree", "add", worktreePath, "-b", branch],
+    });
+  }
 
   const hasPackageLock = await exists(join(worktreePath, "package-lock.json"));
   if (hasPackageLock) {
