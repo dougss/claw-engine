@@ -51,7 +51,7 @@ export async function createScheduler(
   } = ctx;
 
   // One queue per provider; default providers we expect
-  const providerNames = ["alibaba", "anthropic", "default"];
+  const providerNames = ["opencode", "anthropic", "default"];
   const queues = new Map<string, Queue<TaskJobData>>();
   const workers = new Map<string, Worker<TaskJobData>>();
 
@@ -140,9 +140,9 @@ export async function createScheduler(
           dependents.get(dep)!.push(task.id);
         }
 
-        // Simple provider assignment: complex → anthropic, else alibaba
+        // Simple provider assignment: complex → anthropic, else opencode
         const provider =
-          task.complexity === "complex" ? "anthropic" : "alibaba";
+          task.complexity === "complex" ? "anthropic" : "opencode";
 
         const jobData: TaskJobData = {
           // taskId is the real DB UUID — callers that go through enqueueDAG must

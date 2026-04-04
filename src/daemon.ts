@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   );
 
   // Create workers for each provider queue
-  const QUEUE_NAMES = ["claw-alibaba", "claw-anthropic", "claw-default"];
+  const QUEUE_NAMES = ["claw-opencode", "claw-anthropic", "claw-default"];
   const workers: Worker[] = [];
 
   // Connection string for DB
