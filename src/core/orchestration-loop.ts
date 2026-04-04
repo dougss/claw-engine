@@ -121,6 +121,45 @@ async function runDelegate(
   return false; // completed normally
 }
 
+/**
+ * Executes the 13-step autonomous pipeline for a single task.
+ *
+ * The pipeline provisions an isolated git worktree, delegates code generation
+ * to the routed provider (opencode or claude -p), validates the output via
+ * typecheck/lint/test, retries on failure, and — on success — commits, pushes,
+ * and opens a pull request. Every event is streamed to the dashboard via Redis
+ * SSE and persisted as telemetry.
+ *
+ * **Pipeline steps:**
+ * 1. Mark task + work item as `running`
+ * 2. Create git worktree (isolated workspace under `worktrees_dir`)
+ * 3. Load project context (verify workspace accessibility)
+ * 4. Run delegate pipe — streams events; returns early on checkpoint
+ *    - Retries on transient errors up to `ctx.maxAttempts`
+ *    - Aborts immediately on fatal errors (e.g. auth)
+ * 5. Run validation (typecheck → lint → test) if project has TS/JS tooling
+ *    - On validation failure, re-runs delegate with error context
+ *    - Retries up to `config.validation.max_retries` times
+ * 6. Commit remaining changes, push branch, create PR via GitHub
+ * 7. (finally) Remove worktree — always runs, even on error
+ * 8. Update task status to `completed`, roll up work item tokens
+ * 9. Publish `session_end` SSE event
+ * 10. Send Telegram notification (fire-and-forget)
+ *
+ * **Error handling:** On any unrecoverable failure the task is marked `failed`,
+ * the error is classified and persisted, and the work item status is rolled up
+ * (set to `failed` only if all sibling tasks have terminated). Worktree cleanup
+ * always executes via `finally`.
+ *
+ * **Checkpointing:** If the delegate signals a checkpoint (e.g. token budget
+ * hit), the task is saved with status `checkpointing` and the function returns
+ * early — the task can be resumed later.
+ *
+ * @param ctx - Orchestration context containing task metadata, DB/Redis
+ *   handles, provider routing, retry config, and engine configuration.
+ * @throws Never — all errors are caught internally, persisted to DB, and
+ *   published via SSE. The function always resolves.
+ */
 export async function orchestrateTask(
   ctx: OrchestrationContext,
 ): Promise<void> {
