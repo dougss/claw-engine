@@ -415,11 +415,11 @@ export async function orchestrateTask(
     ).catch(() => {});
   } finally {
     // ── Step 7 / Cleanup: always remove worktree ──────────────────────────────
-    if (worktreePath !== null) {
-      await removeWorktree({
-        repoPath: ctx.repo,
-        worktreePath,
-      }).catch(() => {});
-    }
+    // Use the known path even if createWorktree threw before setting worktreePath
+    const cleanupPath = worktreePath ?? join(worktreesDir, ctx.taskId);
+    await removeWorktree({
+      repoPath: ctx.repo,
+      worktreePath: cleanupPath,
+    }).catch(() => {});
   }
 }

@@ -24,6 +24,32 @@ export function registerSubmitCommand(program: import("commander").Command) {
         }
 
         const config = loadConfig();
+
+        // Pre-flight: verify Redis is reachable before creating DB records
+        const { default: Redis } = await import("ioredis");
+        const probe = new Redis({
+          host: config.redis.host,
+          port: config.redis.port,
+          maxRetriesPerRequest: 0,
+          retryStrategy: () => null, // no retries — fail immediately
+          connectTimeout: 3000,
+          lazyConnect: true,
+        });
+        probe.on("error", () => {}); // suppress ioredis stderr noise
+        try {
+          await probe.connect();
+          await probe.ping();
+        } catch (err) {
+          probe.disconnect();
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(
+            `❌ Redis is not reachable at ${config.redis.host}:${config.redis.port}: ${msg}`,
+          );
+          console.error("   Start Redis first: docker start redis");
+          process.exit(1);
+        }
+        probe.disconnect();
+
         const connStr =
           process.env.CLAW_ENGINE_DATABASE_URL ??
           (() => {
@@ -102,7 +128,11 @@ export function registerSubmitCommand(program: import("commander").Command) {
 
         // Enqueue directly — no workers created here (daemon owns the workers)
         const queue = new Queue<TaskJobData>(queueName, {
-          connection: { host: config.redis.host, port: config.redis.port },
+          connection: {
+            host: config.redis.host,
+            port: config.redis.port,
+            maxRetriesPerRequest: 0,
+          },
         });
 
         const jobData: TaskJobData = {

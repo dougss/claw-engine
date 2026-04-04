@@ -17,13 +17,13 @@ import { registerResumeCommand } from "./commands/resume.js";
 import { registerCancelCommand } from "./commands/cancel.js";
 import { registerRetryCommand } from "./commands/retry.js";
 import { registerApproveCommand } from "./commands/approve.js";
+import { registerChatCommand } from "./commands/chat.js";
 
 const program = new Command()
   .name("claw")
   .description("Claw Engine — model-agnostic coding agent factory")
   .version("0.1.0");
 
-registerDoctorCommand(program);
 registerRunCommand(program);
 registerSubmitCommand(program);
 registerStatusCommand(program);
@@ -33,10 +33,26 @@ registerCostsCommand(program);
 registerRouterStatsCommand(program);
 registerCleanupCommand(program);
 registerDaemonCommand(program);
+registerDoctorCommand(program);
 registerPauseCommand(program);
 registerResumeCommand(program);
 registerCancelCommand(program);
 registerRetryCommand(program);
 registerApproveCommand(program);
+registerChatCommand(program);
+
+// Default command logic:
+// - No arguments at all → enter interactive chat
+// - Unknown command → treat as prompt for one-shot run
+const knownCommands = new Set(program.commands.map((c) => c.name()));
+const [, , firstArg] = process.argv;
+
+if (!firstArg) {
+  // No arguments: enter interactive chat
+  process.argv.splice(2, 0, "chat");
+} else if (!firstArg.startsWith("-") && !knownCommands.has(firstArg)) {
+  // Unknown command: treat as prompt for one-shot run
+  process.argv.splice(2, 0, "run");
+}
 
 program.parse();

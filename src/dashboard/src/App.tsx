@@ -7,7 +7,15 @@ import { useStream } from "./hooks/use-stream";
 import { useSseContext } from "./lib/sse-context";
 
 export function App() {
-  const { tasks, selectedId, setSelectedId } = useTasks();
+  const {
+    tasks,
+    selectedId,
+    setSelectedId,
+    hasMore,
+    loadMore,
+    loadingMore,
+    total,
+  } = useTasks();
   const selectedTask = tasks.find((task) => task.id === selectedId) ?? null;
   const { kpis } = useKpis(tasks);
   const { events, isLive } = useStream(selectedId, selectedTask?.status ?? "");
@@ -21,6 +29,10 @@ export function App() {
           tasks={tasks}
           selectedId={selectedId}
           onSelect={setSelectedId}
+          total={total}
+          hasMore={hasMore}
+          loadMore={loadMore}
+          loadingMore={loadingMore}
         />
         <StreamPane task={selectedTask} events={events} isLive={isLive} />
       </div>

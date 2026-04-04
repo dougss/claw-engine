@@ -25,8 +25,12 @@ export interface PipelineContext {
   maxRetries: number;
   openPr: boolean;
   onEvent: (event: HarnessEvent) => void;
-  /** Optional MCP config JSON file path — passed to claude -p for PLAN phase. */
+  /** Task complexity — determines model selection for plan phase. */
+  complexity?: "simple" | "medium" | "complex";
+  /** MCP config JSON file path — passed to claude -p for PLAN and REVIEW phases. */
   mcpConfigPath?: string;
+  /** Path to spec file for review compliance check. */
+  specPath?: string;
   /** GitHub App ID — enables bot-attributed commits and PRs when all three fields are set. */
   githubAppId?: string;
   /** GitHub App Installation ID for the target repo. */
@@ -114,14 +118,24 @@ interface PlanPhaseInput {
   repoPath: string;
   prompt: string;
   claudeBin: string;
+  complexity: "simple" | "medium" | "complex";
   onEvent: (event: HarnessEvent) => void;
   mcpConfigPath?: string;
+}
+
+/** Pick the claude model for planning based on task complexity. */
+function pickPlanModel(
+  complexity: "simple" | "medium" | "complex",
+): string | undefined {
+  // complex tasks get Opus for deeper reasoning; others use the default (Sonnet)
+  return complexity === "complex" ? "claude-opus-4-6" : undefined;
 }
 
 export async function planPhase({
   repoPath,
   prompt,
   claudeBin,
+  complexity,
   onEvent,
   mcpConfigPath,
 }: PlanPhaseInput): Promise<string> {
@@ -131,17 +145,21 @@ export async function planPhase({
   const systemPrompt = [
     "You are a planning agent. You have Nexus MCP available.",
     "First call nexus_list to discover available skills.",
-    "Then call nexus_get for any relevant skills.",
-    "Produce a structured implementation plan based on the skills and the task.",
+    "Then call nexus_get for any relevant skills (especially writing-plans).",
+    "Read CLAUDE.md in the project root for conventions, stack, and project context.",
+    "Produce a structured implementation plan based on the skills, project conventions, and the task.",
     "Output ONLY the plan text. No code implementation.",
   ].join("\n");
 
   const chunks: string[] = [];
   let endReason = "completed";
 
+  const planModel = pickPlanModel(complexity);
+
   const stream = runClaudePipe({
     prompt,
     systemPrompt,
+    model: planModel,
     claudeBin,
     workspacePath: repoPath,
     mcpConfigPath,
@@ -287,6 +305,8 @@ interface ReviewPhaseInput {
   claudeBin: string;
   onEvent: (event: HarnessEvent) => void;
   getDiff?: () => Promise<string>;
+  mcpConfigPath?: string;
+  specPath?: string;
 }
 
 export async function reviewPhase({
@@ -295,6 +315,8 @@ export async function reviewPhase({
   claudeBin,
   onEvent,
   getDiff,
+  mcpConfigPath,
+  specPath,
 }: ReviewPhaseInput): Promise<string> {
   const start = Date.now();
   onEvent({ type: "phase_start", phase: "review", attempt: 1 });
@@ -310,10 +332,33 @@ export async function reviewPhase({
       })();
 
   const systemPrompt = [
-    "You are a senior code reviewer.",
-    "Review the following diff for correctness, performance, security, and style.",
-    "Produce a structured review with: Summary, Issues Found, Suggestions, Verdict (APPROVE/REQUEST_CHANGES).",
-  ].join("\n");
+    "You are a senior code reviewer with access to the full project.",
+    "",
+    "IMPORTANT: You MUST read the actual source files, not just the diff.",
+    "The diff shows WHAT changed. Reading the files shows the FULL context (imports, module type, surrounding code).",
+    "",
+    "Review process:",
+    "1. Call nexus_list, then nexus_get('requesting-code-review') for the review checklist.",
+    "2. Read CLAUDE.md in the project root for conventions and constraints.",
+    specPath
+      ? `3. Read the spec at ${specPath} and verify every requirement is implemented.`
+      : "",
+    "3. Read each modified file IN FULL (not just the diff) to check for:",
+    "   - ESM/CJS compatibility (require() in 'type: module' projects)",
+    "   - Missing/broken imports",
+    "   - Type mismatches with existing interfaces",
+    "   - Unused code, dead code paths",
+    "   - Breaking changes to existing functionality",
+    "4. Produce a structured review with:",
+    "   - Critical issues (must fix — runtime errors, security, data loss)",
+    "   - Important issues (should fix — broken behavior, missing tests, wrong patterns)",
+    "   - Minor suggestions (style, naming, small optimizations)",
+    "   - Verdict: APPROVE or REQUEST_CHANGES",
+    "",
+    "Only use REQUEST_CHANGES for Critical or Important issues. Minor issues alone = APPROVE.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const chunks: string[] = [];
   let endReason = "completed";
@@ -323,6 +368,7 @@ export async function reviewPhase({
     systemPrompt,
     claudeBin,
     workspacePath: repoPath,
+    mcpConfigPath,
   });
 
   for await (const event of stream) {
@@ -505,6 +551,7 @@ export async function runPipeline(
     repoPath,
     prompt,
     claudeBin,
+    complexity: input.complexity ?? "medium",
     onEvent,
     mcpConfigPath,
   });
@@ -575,6 +622,8 @@ export async function runPipeline(
       claudeBin,
       onEvent,
       getDiff: input.getDiff,
+      mcpConfigPath,
+      specPath: input.specPath,
     });
 
     const verdict = parseReviewVerdict(review);

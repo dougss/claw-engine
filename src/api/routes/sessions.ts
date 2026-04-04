@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { desc, inArray } from "drizzle-orm";
+import { count, desc, inArray } from "drizzle-orm";
 import type { getDb } from "../../storage/db.js";
 import { tasks } from "../../storage/schema/index.js";
 
@@ -24,15 +24,22 @@ export function registerSessionRoutes(app: FastifyInstance, db: Db): void {
     return { sessions: activeTasks };
   });
 
-  // All tasks, ordered by most recent
+  // All tasks, ordered by most recent (with offset pagination)
   app.get("/tasks", async (request) => {
-    const query = request.query as { limit?: string };
+    const query = request.query as { limit?: string; offset?: string };
     const limit = Math.min(parseInt(query.limit ?? "50", 10), 200);
-    const allTasks = await db
-      .select()
-      .from(tasks)
-      .orderBy(desc(tasks.createdAt))
-      .limit(limit);
-    return { tasks: allTasks, total: allTasks.length };
+    const offset = Math.max(parseInt(query.offset ?? "0", 10), 0);
+
+    const [allTasks, [totalRow]] = await Promise.all([
+      db
+        .select()
+        .from(tasks)
+        .orderBy(desc(tasks.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db.select({ count: count() }).from(tasks),
+    ]);
+
+    return { tasks: allTasks, total: totalRow?.count ?? 0, limit, offset };
   });
 }

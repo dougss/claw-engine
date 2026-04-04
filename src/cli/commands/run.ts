@@ -138,8 +138,9 @@ export function registerRunCommand(program: import("commander").Command) {
     }
   }
   program
-    .command("run <repo> <prompt>")
-    .description("Run a single task directly in a repo")
+    .command("run [prompt]")
+    .description("Run a single task (default: cwd, pipeline on)")
+    .option("--repo <path>", "Target repo (default: cwd)")
     .option("--model <model>", "Model to use (overrides router)")
     .option("--delegate", "Force claude -p regardless of complexity")
     .option("--dry-run", "Show plan without executing")
@@ -147,27 +148,29 @@ export function registerRunCommand(program: import("commander").Command) {
     .option("--no-resume", "Disable auto-resume on checkpoint")
     .option("--resume <sessionId>", "Resume a previous session by ID")
     .option("--no-commit", "Skip automatic git commit of changes")
-    .option(
-      "--pipeline",
-      "Use 5-phase pipeline (plan → execute → validate → review → pr)",
-    )
-    .option("--pr", "Open a PR after pipeline completes (requires --pipeline)")
+    .option("--no-pipeline", "Disable 5-phase pipeline")
+    .option("--pr", "Open a PR after pipeline completes")
     .action(
       async (
-        repo: string,
-        prompt: string,
+        prompt: string | undefined,
         opts: {
+          repo?: string;
           model?: string;
           delegate?: boolean;
           dryRun?: boolean;
           maxTurns?: number;
           resume?: boolean | string;
           noResume?: boolean;
-          noCommit?: boolean;
+          commit?: boolean;
           pipeline?: boolean;
           pr?: boolean;
         },
       ) => {
+        if (!prompt) {
+          console.error("Usage: claw run <prompt>");
+          process.exit(1);
+        }
+        const repo = opts.repo ?? ".";
         const GITHUB_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
         let isGithubRepo = false;
         let tempDir: string | null = null;
@@ -186,11 +189,6 @@ export function registerRunCommand(program: import("commander").Command) {
           );
           repoPath = tempDir;
           isGithubRepo = true;
-        }
-
-        if (opts.dryRun) {
-          console.log(`[dry-run] Would run in ${repoPath}: "${prompt}"`);
-          return;
         }
 
         const config = loadConfig();
@@ -229,6 +227,16 @@ export function registerRunCommand(program: import("commander").Command) {
             }
           : route;
         const mode = "delegate" as const;
+
+        if (opts.dryRun) {
+          console.log(`[dry-run] repo       → ${repoPath}`);
+          console.log(`[dry-run] prompt     → "${prompt}"`);
+          console.log(`[dry-run] complexity → ${complexity}`);
+          console.log(`[dry-run] provider   → ${effectiveRoute.provider}`);
+          console.log(`[dry-run] reason     → ${effectiveRoute.reason}`);
+          console.log(`[dry-run] model      → ${effectiveRoute.model}`);
+          return;
+        }
 
         // Connect Redis for SSE publishing (best-effort, dashboard sees live events)
         let redis: import("ioredis").Redis | null = null;
@@ -310,7 +318,7 @@ export function registerRunCommand(program: import("commander").Command) {
           }
         };
 
-        if (opts.pipeline) {
+        if (opts.pipeline !== false) {
           const { runPipeline } = await import("../../core/pipeline.js");
           const { resolve: resolvePath } = await import("node:path");
           const { fileURLToPath } = await import("node:url");
@@ -330,6 +338,7 @@ export function registerRunCommand(program: import("commander").Command) {
               repoPath,
               prompt,
               config,
+              complexity,
               claudeBin: config.providers.anthropic.binary,
               opencodeBin: config.providers.opencode.binary,
               mcpConfigPath,
@@ -377,7 +386,7 @@ export function registerRunCommand(program: import("commander").Command) {
             if (result.executeSuccess) {
               // Pipeline with --pr handles commit+push internally; skip autoCommit
               if (!opts.pr) {
-                autoCommit(repoPath, prompt, !!opts.noCommit);
+                autoCommit(repoPath, prompt, opts.commit === false);
               }
               console.log("\n✅ pipeline complete");
               if (result.prUrl) console.log(`PR: ${result.prUrl}`);
@@ -402,7 +411,7 @@ export function registerRunCommand(program: import("commander").Command) {
           // Create a feature branch unless --no-commit or already on a feature branch
           const defaultBranch = getDefaultBranch(repoPath);
           let clawBranch: string | null = null;
-          if (!opts.noCommit) {
+          if (opts.commit !== false) {
             clawBranch = createClawBranch(repoPath, prompt);
           }
 
@@ -487,7 +496,7 @@ export function registerRunCommand(program: import("commander").Command) {
                 if (event.reason === "completed") {
                   console.log("\n✅ done");
                   // Commit any remaining unstaged changes (delegate may have already committed)
-                  autoCommit(repoPath, prompt, !!opts.noCommit);
+                  autoCommit(repoPath, prompt, opts.commit === false);
 
                   // Check if the branch has commits ahead of default — push + PR
                   if (clawBranch && clawBranch !== defaultBranch) {

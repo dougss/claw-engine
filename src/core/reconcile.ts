@@ -1,5 +1,6 @@
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
 import { eq, inArray } from "drizzle-orm";
 import type { getDb } from "../storage/db.js";
 import { tasks } from "../storage/schema/index.js";
@@ -88,11 +89,49 @@ export async function reconcileOnStartup({
     }
   }
 
-  // Re-queue interrupted running tasks
+  // Re-queue interrupted running tasks — clean up their worktrees first
   const runningTasks = await getRunningTasks(db);
   let tasksRequeued = 0;
 
   for (const task of runningTasks) {
+    // Clean up worktree from previous run before re-queuing
+    const worktreePath = join(worktreesDir, task.id);
+    try {
+      // Remove git worktree registration
+      const repo = task.repo;
+      if (repo) {
+        await new Promise<void>((resolve) => {
+          execFile(
+            "git",
+            ["-C", repo, "worktree", "remove", "--force", worktreePath],
+            () => resolve(), // best-effort — ignore errors
+          );
+        });
+        await new Promise<void>((resolve) => {
+          execFile("git", ["-C", repo, "worktree", "prune"], () => resolve());
+        });
+      }
+    } catch {
+      // best-effort
+    }
+    // Also clean up the directory if git worktree remove didn't
+    try {
+      await rm(worktreePath, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+
+    // Delete the local branch so createWorktree can recreate it
+    if (task.repo && task.branch) {
+      await new Promise<void>((resolve) => {
+        execFile(
+          "git",
+          ["-C", task.repo, "branch", "-D", task.branch],
+          () => resolve(), // best-effort
+        );
+      });
+    }
+
     // Mark as interrupted
     await db
       .update(tasks)
