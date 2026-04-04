@@ -1,3 +1,4 @@
+// tested by e2e
 export const TASK_STATUS = {
   pending: "pending",
   merging_dependency: "merging_dependency",
