@@ -17,11 +17,12 @@
 
 ### 0. Interactive Chat (`claw` or `claw chat`) ← **default**
 
-Multi-turn coding session. First turn runs the full pipeline; follow-ups use delegate-only with session context.
+Multi-turn conversational session. All turns use **delegate-only** (no pipeline) by default — classify → route → run opencode or claude -p directly. Use `--pipeline` or `/pipeline` to force the full pipeline on a turn.
 
 ```bash
-claw                        # open chat (default when no args)
-claw chat                   # explicit
+claw                          # open chat (default when no args)
+claw chat                     # explicit
+claw chat --pipeline          # enable full pipeline on first turn
 
 # Inside the chat:
 # /status         — show session info (model, tokens, complexity)
@@ -35,6 +36,8 @@ claw chat                   # explicit
 ```
 
 Sessions are saved to `~/.claw-engine/sessions/<uuid>.json`. Resume with `/resume <id>` or use `claw sessions` to list them.
+
+**Routing in chat:** simple/medium tasks → opencode (qwen3-coder-plus), complex → claude -p. No branch creation, no auto-commit in chat mode.
 
 ### 1. One-shot run (`claw run` or `claw "<prompt>"`)
 
