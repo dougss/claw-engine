@@ -15,14 +15,38 @@
 
 ## Execution Modes
 
-### 1. Manual CLI (`claw run`)
+### 0. Interactive Chat (`claw` or `claw chat`) ← **default**
 
-Direct execution — you run, you watch, you get results.
+Multi-turn coding session. First turn runs the full pipeline; follow-ups use delegate-only with session context.
 
 ```bash
-claw run <repo> "<prompt>"          # classify → route → branch → delegate → commit → push → PR
-claw run . "<prompt>" --no-commit   # without auto-commit/branch/PR
-claw run . "<prompt>" --delegate    # force claude -p
+claw                        # open chat (default when no args)
+claw chat                   # explicit
+
+# Inside the chat:
+# /status         — show session info (model, tokens, complexity)
+# /model <name>   — override model for next turn
+# /delegate       — force claude -p on next turn
+# /pipeline       — force full pipeline on next turn
+# /resume <id>    — load a previous session
+# /clear          — clear screen
+# /help           — list commands
+# /exit           — exit and save session
+```
+
+Sessions are saved to `~/.claw-engine/sessions/<uuid>.json`. Resume with `/resume <id>` or use `claw sessions` to list them.
+
+### 1. One-shot run (`claw run` or `claw "<prompt>"`)
+
+Single-turn execution with optional pipeline.
+
+```bash
+claw "add dark mode to the dashboard"   # implicit run, uses pipeline + cwd
+claw run "<prompt>"                     # explicit
+claw run "<prompt>" --repo /path/repo   # different repo (default: cwd)
+claw run "<prompt>" --no-pipeline       # delegate-only, no plan/review phases
+claw run "<prompt>" --no-commit         # without auto-commit/branch/PR
+claw run "<prompt>" --delegate          # force claude -p
 ```
 
 **Flow:** classify task (Qwen) → route to provider → create branch from main → delegate (opencode/claude -p) → commit → push → PR via `gh` → publish events to Redis SSE.
@@ -52,6 +76,20 @@ claw submit "<description>" --repos <repo-path>   # enqueue task
 
 Both providers have **Nexus MCP configured natively** — agents call it themselves.
 DashScope API is used only for **task classification + intent title** (`classifyTask` — ~50 tokens).
+
+### Pipeline (5 phases, used by `claw run` and chat first turn)
+
+`runPipeline()` in `src/core/pipeline.ts`:
+
+| Phase        | What happens                                  | Notes                                                                                          |
+| ------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **PLAN**     | `claude -p` generates a plan for the task     | Model: Opus for complex, default for simple/medium                                             |
+| **EXECUTE**  | `opencode` or `claude -p` implements the plan | Routed by complexity                                                                           |
+| **VALIDATE** | typecheck + lint + test                       | Retries up to `max_retries` on failure                                                         |
+| **REVIEW**   | `claude -p` code reviews all changes          | Has full Nexus MCP access (requesting-code-review skill); reads CLAUDE.md + full file contents |
+| **PR**       | `gh pr create`                                | Optional, `openPr: false` in chat mode                                                         |
+
+Skip pipeline with `--no-pipeline` (or `/pipeline` slash command forces it on follow-up turns).
 
 ## Key Architecture Files
 
@@ -182,7 +220,7 @@ All events visible in dashboard log viewer with semantic formatting.
 
 ```bash
 # Run tests
-npm test                              # unit tests (303 tests, 43 files)
+npm test                              # unit tests
 npm run test:integration              # integration tests (needs DB + Redis)
 
 # Type checking
@@ -190,14 +228,22 @@ npx tsc --noEmit
 
 # CLI — requires BAILIAN_SP_API_KEY in env
 source ~/.openclaw/secrets/.env
-npm run claw -- run <repo> "<prompt>"              # manual execution
-npm run claw -- run . "<prompt>" --no-commit       # without branch/PR
-npm run claw -- submit "<desc>" --repos <path>     # enqueue for daemon
-npm run claw -- status                             # list active work items
-npm run claw -- doctor                             # health checks
+
+# dev (no build needed)
+npm run claw -- chat                              # interactive chat
+npm run claw -- "add dark mode"                   # one-shot run (implicit, uses cwd)
+npm run claw -- run "<prompt>" --repo /path       # explicit run with repo
+npm run claw -- run "<prompt>" --no-pipeline      # delegate-only
+npm run claw -- submit "<desc>" --repos <path>    # enqueue for daemon
+npm run claw -- sessions                          # list chat sessions
+npm run claw -- status                            # list active work items
+npm run claw -- doctor                            # health checks
 
 # Build (backend + dashboard)
 npm run build
+
+# Global install (for use as `claw` anywhere)
+npm run build && npm link            # or: npm pack && npm install -g claw-engine-*.tgz
 
 # Dashboard dev
 cd src/dashboard && npm run dev       # Vite dev server, proxy /api to :3004
