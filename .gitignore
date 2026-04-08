@@ -4,3 +4,6 @@ dist
 .DS_Store
 .claude
 migrations/meta/*.json
+*.tgz
+*.bak
+test-results/

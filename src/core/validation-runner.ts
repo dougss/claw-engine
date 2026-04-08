@@ -50,20 +50,24 @@ export async function runValidation({
     const results = await Promise.allSettled(promises);
     const stepResults: StepResult[] = [];
 
-    // Map each settled result to its corresponding step name
     for (let i = 0; i < results.length; i++) {
       const result = results[i];
-      const stepName = steps[i].name;
-      
       if (result.status === "fulfilled") {
         stepResults.push(result.value);
       } else {
-        // Handle rejected promises (shouldn't happen with the try/catch above, but just to be safe)
-        stepResults.push({ name: stepName, passed: false, output: result.reason.message || String(result.reason), durationMs: 0 });
+        stepResults.push({
+          name: steps[i].name,
+          passed: false,
+          output: result.reason.message || String(result.reason),
+          durationMs: 0,
+        });
       }
     }
 
-    const overallPassed = !stepResults.some(result => !result.passed && steps.find(s => s.name === result.name)?.required);
+    // Use index-aligned lookup (not find-by-name) to check required steps
+    const overallPassed = !stepResults.some(
+      (_, i) => !stepResults[i].passed && steps[i].required,
+    );
     return { passed: overallPassed, steps: stepResults };
   } else {
     const stepResults: StepResult[] = [];
@@ -79,6 +83,7 @@ export async function runValidation({
 
       if (!passed && step.required) {
         overallPassed = false;
+        break; // Short-circuit: no point running remaining steps
       }
     }
 

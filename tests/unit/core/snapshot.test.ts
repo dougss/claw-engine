@@ -1,14 +1,19 @@
 import { describe, it, beforeEach, afterEach, vi, expect } from "vitest";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync } from "node:fs";
 import {
   createSnapshot,
   restoreSnapshot,
   cleanupSnapshot,
 } from "../../../src/core/snapshot.js";
 
-// Mock node:child_process
 vi.mock("node:child_process", () => ({
-  execSync: vi.fn(),
+  execFileSync: vi.fn(),
+}));
+
+vi.mock("node:fs", () => ({
+  existsSync: vi.fn(() => true),
+  lstatSync: vi.fn(() => ({ isDirectory: () => true })),
 }));
 
 describe("snapshot", () => {
@@ -16,13 +21,9 @@ describe("snapshot", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Mock execSync to return something reasonable for git commands
-    (execSync as any).mockImplementation((command: string) => {
-      if (command.startsWith("git tag claw-snapshot-")) {
-        return ""; // Success
-      }
-      return "";
-    });
+    (execFileSync as any).mockReturnValue("");
+    (existsSync as any).mockReturnValue(true);
+    (lstatSync as any).mockReturnValue({ isDirectory: () => true });
   });
 
   afterEach(() => {
@@ -30,26 +31,7 @@ describe("snapshot", () => {
   });
 
   describe("createSnapshot", () => {
-    it("creates a git tag with timestamp", () => {
-      const timestamp = Date.now();
-      vi.useFakeTimers();
-      vi.setSystemTime(timestamp);
-
-      createSnapshot({ repoPath: mockRepoPath });
-
-      expect(execSync).toHaveBeenCalledWith(
-        `git tag claw-snapshot-${timestamp} HEAD`,
-        {
-          cwd: mockRepoPath,
-          encoding: "utf-8",
-          timeout: 300_000,
-        }
-      );
-
-      vi.useRealTimers();
-    });
-
-    it("returns the created tag name", () => {
+    it("creates a git tag with timestamp using execFileSync", () => {
       const timestamp = Date.now();
       vi.useFakeTimers();
       vi.setSystemTime(timestamp);
@@ -57,73 +39,76 @@ describe("snapshot", () => {
       const result = createSnapshot({ repoPath: mockRepoPath });
 
       expect(result).toBe(`claw-snapshot-${timestamp}`);
+      expect(execFileSync).toHaveBeenCalledWith(
+        "git",
+        ["tag", `claw-snapshot-${timestamp}`, "HEAD"],
+        expect.objectContaining({ cwd: expect.any(String), encoding: "utf-8" }),
+      );
 
       vi.useRealTimers();
     });
   });
 
   describe("restoreSnapshot", () => {
-    it("restores to the provided reference with checkout, clean, and reset", () => {
+    it("restores using execFileSync with array args", () => {
       const mockRef = "claw-snapshot-12345";
-      
+
       restoreSnapshot({ repoPath: mockRepoPath, ref: mockRef });
 
-      // Should call git reset and git clean in sequence
-      expect(execSync).toHaveBeenNthCalledWith(
-        1,
-        `git reset --hard ${mockRef}`,
-        {
-          cwd: mockRepoPath,
-          encoding: "utf-8",
-          timeout: 300_000,
-        }
+      expect(execFileSync).toHaveBeenCalledWith(
+        "git",
+        ["reset", "--hard", mockRef],
+        expect.objectContaining({ cwd: expect.any(String) }),
       );
-      expect(execSync).toHaveBeenNthCalledWith(
-        2,
-        "git clean -fd",
-        {
-          cwd: mockRepoPath,
-          encoding: "utf-8",
-          timeout: 300_000,
-        }
+      expect(execFileSync).toHaveBeenCalledWith(
+        "git",
+        ["clean", "-fd"],
+        expect.objectContaining({ cwd: expect.any(String) }),
       );
+    });
+
+    it("rejects invalid ref patterns", () => {
+      expect(() => {
+        restoreSnapshot({ repoPath: mockRepoPath, ref: "HEAD; rm -rf /" });
+      }).toThrow("Invalid snapshot ref");
+    });
+
+    it("rejects refs without claw-snapshot prefix", () => {
+      expect(() => {
+        restoreSnapshot({ repoPath: mockRepoPath, ref: "some-other-tag" });
+      }).toThrow("Invalid snapshot ref");
     });
   });
 
   describe("cleanupSnapshot", () => {
-    it("removes the git tag", () => {
+    it("removes the git tag using execFileSync", () => {
       const mockRef = "claw-snapshot-12345";
-      
+
       cleanupSnapshot({ repoPath: mockRepoPath, ref: mockRef });
 
-      expect(execSync).toHaveBeenCalledWith(
-        `git tag -d ${mockRef}`,
-        {
-          cwd: mockRepoPath,
-          encoding: "utf-8",
-          timeout: 300_000,
-        }
+      expect(execFileSync).toHaveBeenCalledWith(
+        "git",
+        ["tag", "-d", mockRef],
+        expect.objectContaining({ cwd: expect.any(String) }),
       );
     });
 
-    it("handles errors gracefully", () => {
-      (execSync as any).mockImplementation(() => {
+    it("is idempotent — does not throw on already-deleted tag", () => {
+      (execFileSync as any).mockImplementation(() => {
         throw new Error("Tag doesn't exist");
       });
 
-      // Should not throw an error even if git command fails
+      expect(() => {
+        cleanupSnapshot({ repoPath: mockRepoPath, ref: "claw-snapshot-99999" });
+      }).not.toThrow();
+    });
+
+    it("rejects invalid refs silently", () => {
       expect(() => {
         cleanupSnapshot({ repoPath: mockRepoPath, ref: "invalid-tag" });
       }).not.toThrow();
-
-      expect(execSync).toHaveBeenCalledWith(
-        `git tag -d invalid-tag`,
-        {
-          cwd: mockRepoPath,
-          encoding: "utf-8",
-          timeout: 300_000,
-        }
-      );
+      // Should not call execFileSync because ref validation fails first
+      expect(execFileSync).not.toHaveBeenCalled();
     });
   });
 });

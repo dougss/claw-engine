@@ -602,8 +602,6 @@ export async function runPipeline(
 
       if (validation.passed) {
         executeSuccess = true;
-        // Cleanup snapshot on success
-        cleanupSnapshot({ repoPath, ref: snapshotRef });
         break;
       }
 
@@ -622,8 +620,6 @@ export async function runPipeline(
     }
 
     if (!executeSuccess) {
-      // Cleanup snapshot on final failure
-      cleanupSnapshot({ repoPath, ref: snapshotRef });
       return {
         plan,
         executeSuccess: false,
@@ -661,7 +657,8 @@ export async function runPipeline(
         break;
       }
 
-      // REQUEST_CHANGES — loop back: execute to fix, then validate
+      // REQUEST_CHANGES — restore snapshot before fix attempt
+      restoreSnapshot({ repoPath, ref: snapshotRef });
       console.log(
         `[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`,
       );
@@ -687,8 +684,6 @@ export async function runPipeline(
       });
 
       if (!fixValidation.passed) {
-        // Validation failed after review fix — abort and cleanup snapshot
-        cleanupSnapshot({ repoPath, ref: snapshotRef });
         return {
           plan,
           executeSuccess: false,
@@ -708,10 +703,6 @@ export async function runPipeline(
       } catch (err: any) {
         if (err.message.includes("nothing to commit")) {
           console.log("[pipeline] nothing to commit, skipping PR");
-          
-          // Cleanup snapshot when nothing to commit
-          cleanupSnapshot({ repoPath, ref: snapshotRef });
-          
           return {
             plan,
             executeSuccess: true,
@@ -737,9 +728,6 @@ export async function runPipeline(
       branch: prBranch,
       baseBranch: prBase,
     });
-
-    // Cleanup snapshot on successful completion of the full pipeline
-    cleanupSnapshot({ repoPath, ref: snapshotRef });
 
     return {
       plan,
