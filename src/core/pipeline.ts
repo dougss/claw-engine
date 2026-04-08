@@ -575,177 +575,182 @@ export async function runPipeline(
   // Create a snapshot before entering the EXECUTE-VALIDATE retry loop
   const snapshotRef = createSnapshot({ repoPath });
 
-  let validation: ValidationResult = { passed: false, steps: [] };
-  let previousError: string | undefined;
-  let executeSuccess = false;
+  try {
+    let validation: ValidationResult = { passed: false, steps: [] };
+    let previousError: string | undefined;
+    let executeSuccess = false;
 
-  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-    await executePhase({
-      repoPath,
-      prompt,
-      plan,
-      previousError,
-      opencodeBin,
-      opencodeModel,
-      onEvent,
-      attempt,
-    });
-    validation = await validatePhase({
-      repoPath,
-      validationSteps,
-      onEvent,
-      execCommand: input.execCommand,
-      attempt,
-      parallel: validationGroup.parallel,
-    });
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      await executePhase({
+        repoPath,
+        prompt,
+        plan,
+        previousError,
+        opencodeBin,
+        opencodeModel,
+        onEvent,
+        attempt,
+      });
+      validation = await validatePhase({
+        repoPath,
+        validationSteps,
+        onEvent,
+        execCommand: input.execCommand,
+        attempt,
+        parallel: validationGroup.parallel,
+      });
 
-    if (validation.passed) {
-      executeSuccess = true;
-      // Cleanup snapshot on success
-      cleanupSnapshot({ repoPath, ref: snapshotRef });
-      break;
-    }
+      if (validation.passed) {
+        executeSuccess = true;
+        // Cleanup snapshot on success
+        cleanupSnapshot({ repoPath, ref: snapshotRef });
+        break;
+      }
 
-    previousError = compressValidationErrors(
-      validation.steps,
-      config.validation.max_error_context_chars
-    );
-
-    if (attempt <= maxRetries) {
-      // Restore snapshot before retrying execute on validation failure
-      restoreSnapshot({ repoPath, ref: snapshotRef });
-      console.log(
-        `[pipeline] VALIDATE failed (attempt ${attempt}/${maxRetries + 1}), retrying EXECUTE...`,
+      previousError = compressValidationErrors(
+        validation.steps,
+        config.validation.max_error_context_chars
       );
-    }
-  }
 
-  if (!executeSuccess) {
-    // Cleanup snapshot on final failure
-    cleanupSnapshot({ repoPath, ref: snapshotRef });
-    return {
-      plan,
-      executeSuccess: false,
-      validation,
-      review: "",
-      prUrl: null,
-      reviewPassed: false,
-    };
-  }
-
-  let review = "";
-  let prUrl: string | null = null;
-  let reviewPassed = false;
-  let reviewAttempt = 0;
-  const executeAttemptOffset = maxRetries + 1; // continue numbering from where validate left off
-
-  while (reviewAttempt <= maxReviewRetries) {
-    reviewAttempt++;
-
-    review = await reviewPhase({
-      repoPath,
-      prompt,
-      claudeBin,
-      onEvent,
-      getDiff: input.getDiff,
-      mcpConfigPath,
-      specPath: input.specPath,
-      config: input.config,
-    });
-
-    const verdict = parseReviewVerdict(review);
-
-    if (verdict === "APPROVE" || reviewAttempt > maxReviewRetries) {
-      reviewPassed = verdict === "APPROVE";
-      break;
+      if (attempt <= maxRetries) {
+        // Restore snapshot before retrying execute on validation failure
+        restoreSnapshot({ repoPath, ref: snapshotRef });
+        console.log(
+          `[pipeline] VALIDATE failed (attempt ${attempt}/${maxRetries + 1}), retrying EXECUTE...`,
+        );
+      }
     }
 
-    // REQUEST_CHANGES — loop back: execute to fix, then validate
-    console.log(
-      `[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`,
-    );
-
-    await executePhase({
-      repoPath,
-      prompt,
-      plan,
-      previousError: `Code review requested changes:\n${review}`,
-      opencodeBin,
-      opencodeModel,
-      onEvent,
-      attempt: executeAttemptOffset + reviewAttempt,
-    });
-
-    const fixValidation = await validatePhase({
-      repoPath,
-      validationSteps,
-      onEvent,
-      execCommand: input.execCommand,
-      attempt: executeAttemptOffset + reviewAttempt,
-      parallel: validationGroup.parallel,
-    });
-
-    if (!fixValidation.passed) {
-      // Validation failed after review fix — abort and cleanup snapshot
+    if (!executeSuccess) {
+      // Cleanup snapshot on final failure
       cleanupSnapshot({ repoPath, ref: snapshotRef });
       return {
         plan,
         executeSuccess: false,
-        validation: fixValidation,
-        review,
+        validation,
+        review: "",
         prUrl: null,
         reviewPassed: false,
       };
     }
-  }
 
-  // Commit, push, PR
-  let prBranch: string | undefined;
-  if (openPr) {
-    try {
-      prBranch = gitCommitAndPush(repoPath, prompt);
-    } catch (err: any) {
-      if (err.message.includes("nothing to commit")) {
-        console.log("[pipeline] nothing to commit, skipping PR");
-        
-        // Cleanup snapshot when nothing to commit
+    let review = "";
+    let prUrl: string | null = null;
+    let reviewPassed = false;
+    let reviewAttempt = 0;
+    const executeAttemptOffset = maxRetries + 1; // continue numbering from where validate left off
+
+    while (reviewAttempt <= maxReviewRetries) {
+      reviewAttempt++;
+
+      review = await reviewPhase({
+        repoPath,
+        prompt,
+        claudeBin,
+        onEvent,
+        getDiff: input.getDiff,
+        mcpConfigPath,
+        specPath: input.specPath,
+        config: input.config,
+      });
+
+      const verdict = parseReviewVerdict(review);
+
+      if (verdict === "APPROVE" || reviewAttempt > maxReviewRetries) {
+        reviewPassed = verdict === "APPROVE";
+        break;
+      }
+
+      // REQUEST_CHANGES — loop back: execute to fix, then validate
+      console.log(
+        `[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`,
+      );
+
+      await executePhase({
+        repoPath,
+        prompt,
+        plan,
+        previousError: `Code review requested changes:\n${review}`,
+        opencodeBin,
+        opencodeModel,
+        onEvent,
+        attempt: executeAttemptOffset + reviewAttempt,
+      });
+
+      const fixValidation = await validatePhase({
+        repoPath,
+        validationSteps,
+        onEvent,
+        execCommand: input.execCommand,
+        attempt: executeAttemptOffset + reviewAttempt,
+        parallel: validationGroup.parallel,
+      });
+
+      if (!fixValidation.passed) {
+        // Validation failed after review fix — abort and cleanup snapshot
         cleanupSnapshot({ repoPath, ref: snapshotRef });
-        
         return {
           plan,
-          executeSuccess: true,
-          validation,
+          executeSuccess: false,
+          validation: fixValidation,
           review,
           prUrl: null,
-          reviewPassed,
+          reviewPassed: false,
         };
       }
-      throw new Error(`Failed to commit/push for PR: ${err.message}`);
     }
+
+    // Commit, push, PR
+    let prBranch: string | undefined;
+    if (openPr) {
+      try {
+        prBranch = gitCommitAndPush(repoPath, prompt);
+      } catch (err: any) {
+        if (err.message.includes("nothing to commit")) {
+          console.log("[pipeline] nothing to commit, skipping PR");
+          
+          // Cleanup snapshot when nothing to commit
+          cleanupSnapshot({ repoPath, ref: snapshotRef });
+          
+          return {
+            plan,
+            executeSuccess: true,
+            validation,
+            review,
+            prUrl: null,
+            reviewPassed,
+          };
+        }
+        throw new Error(`Failed to commit/push for PR: ${err.message}`);
+      }
+    }
+
+    const prBase = defaultBranchOverride ?? resolveDefaultBranch(repoPath);
+
+    prUrl = await prPhase({
+      repoPath,
+      prompt,
+      review,
+      onEvent,
+      openPr,
+      execGh: prExecGh,
+      branch: prBranch,
+      baseBranch: prBase,
+    });
+
+    // Cleanup snapshot on successful completion of the full pipeline
+    cleanupSnapshot({ repoPath, ref: snapshotRef });
+
+    return {
+      plan,
+      executeSuccess: true,
+      validation,
+      review,
+      prUrl,
+      reviewPassed,
+    };
+  } finally {
+    // Ensure snapshot is cleaned up in case of any exceptions
+    cleanupSnapshot({ repoPath, ref: snapshotRef });
   }
-
-  const prBase = defaultBranchOverride ?? resolveDefaultBranch(repoPath);
-
-  prUrl = await prPhase({
-    repoPath,
-    prompt,
-    review,
-    onEvent,
-    openPr,
-    execGh: prExecGh,
-    branch: prBranch,
-    baseBranch: prBase,
-  });
-
-  // Cleanup snapshot on successful completion of the full pipeline
-  cleanupSnapshot({ repoPath, ref: snapshotRef });
-
-  return {
-    plan,
-    executeSuccess: true,
-    validation,
-    review,
-    prUrl,
-    reviewPassed,
-  };
 }
