@@ -18,6 +18,8 @@ import { runOpencodePipe } from "../integrations/opencode/opencode-pipe.js";
 import { runClaudePipe } from "../integrations/claude-p/claude-pipe.js";
 import { loadProjectContext } from "../harness/context-builder.js";
 import { runValidation } from "./validation-runner.js";
+import { compressValidationErrors } from "./context-compressor.js";
+import { createSnapshot, restoreSnapshot, cleanupSnapshot } from "./snapshot.js";
 import { classifyError } from "./error-classifier.js";
 import { sendAlert } from "../integrations/openclaw/client.js";
 import { createPullRequest } from "../integrations/github/client.js";
@@ -228,45 +230,54 @@ export async function orchestrateTask(
       let validationAttempt = 0;
       let validationPassed = false;
 
-      while (true) {
-        const result = await runValidation({
-          workspacePath: wtp,
-          steps: ctx.config.validation.typescript,
-          execCommand,
-        });
+      // Snapshot before validation retry loop
+      const snapshotRef = createSnapshot({ repoPath: wtp });
 
-        await ctx.db
-          .update(tasks)
-          .set({
-            validationResults: result as unknown as Record<string, unknown>,
-            validationAttempts: validationAttempt + 1,
-          })
-          .where(eq(tasks.id, ctx.taskId))
-          .catch(() => {});
+      try {
+        while (true) {
+          const result = await runValidation({
+            workspacePath: wtp,
+            steps: ctx.config.validation.typescript.steps,
+            execCommand,
+            parallel: ctx.config.validation.typescript.parallel,
+          });
 
-        void publishEvent(ctx.redis, {
-          type: "validation_result",
-          data: { taskId: ctx.taskId, ...result },
-        }).catch(() => {});
+          await ctx.db
+            .update(tasks)
+            .set({
+              validationResults: result as unknown as Record<string, unknown>,
+              validationAttempts: validationAttempt + 1,
+            })
+            .where(eq(tasks.id, ctx.taskId))
+            .catch(() => {});
 
-        if (result.passed) {
-          validationPassed = true;
-          break;
+          void publishEvent(ctx.redis, {
+            type: "validation_result",
+            data: { taskId: ctx.taskId, ...result },
+          }).catch(() => {});
+
+          if (result.passed) {
+            validationPassed = true;
+            break;
+          }
+
+          if (validationAttempt >= maxValidationRetries) {
+            break; // exhausted retries — validationPassed stays false
+          }
+
+          // Restore snapshot before retry, then re-run delegate with compressed error context
+          restoreSnapshot({ repoPath: wtp, ref: snapshotRef });
+          validationAttempt++;
+          const compressedError = compressValidationErrors(
+            result.steps,
+            ctx.config.validation.max_error_context_chars,
+          );
+
+          const retryPrompt = `${ctx.description}\n\nFix the following validation errors:\n\n${compressedError}`;
+          await runDelegate(ctx, retryPrompt, wtp);
         }
-
-        if (validationAttempt >= maxValidationRetries) {
-          break; // exhausted retries — validationPassed stays false
-        }
-
-        // Re-run delegate with validation error context
-        validationAttempt++;
-        const failedOutput = result.steps
-          .filter((s) => !s.passed)
-          .map((s) => `[${s.name}]\n${s.output}`)
-          .join("\n\n");
-
-        const retryPrompt = `${ctx.description}\n\nFix the following validation errors:\n\n${failedOutput}`;
-        await runDelegate(ctx, retryPrompt, wtp);
+      } finally {
+        cleanupSnapshot({ repoPath: wtp, ref: snapshotRef });
       }
 
       if (!validationPassed) {

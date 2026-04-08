@@ -57,7 +57,7 @@ describe("configSchema", () => {
         },
       },
       router: { complexity_signals: { refactor: 3, crud: -2 } },
-      validation: { max_retries: 2, typescript: [], python: [] },
+      validation: { max_retries: 2, typescript: { parallel: false, steps: [] }, python: { parallel: false, steps: [] } },
     };
 
     const result = configSchema.parse(input);
@@ -110,7 +110,7 @@ describe("configSchema", () => {
         },
       },
       router: { complexity_signals: {} },
-      validation: { max_retries: 2, typescript: [], python: [] },
+      validation: { max_retries: 2, typescript: { parallel: false, steps: [] }, python: { parallel: false, steps: [] } },
     };
 
     const result = configSchema.parse(minimal);
@@ -165,7 +165,7 @@ describe("configSchema", () => {
         },
       },
       router: { complexity_signals: {} },
-      validation: { max_retries: 2, typescript: [], python: [] },
+      validation: { max_retries: 2, typescript: { parallel: false, steps: [] }, python: { parallel: false, steps: [] } },
     };
 
     expect(() => configSchema.parse(bad)).toThrow();

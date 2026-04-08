@@ -9,11 +9,13 @@ import {
   type ValidationResult,
   type ExecCommandFn,
 } from "./validation-runner.js";
+import { compressValidationErrors } from "./context-compressor.js";
 import {
   getInstallationToken,
   readPrivateKey,
 } from "../integrations/github/github-app-auth.js";
 import { configureGitForApp } from "../integrations/github/git-config.js";
+import { createSnapshot, restoreSnapshot, cleanupSnapshot } from "./snapshot.js";
 
 export interface PipelineContext {
   repoPath: string;
@@ -121,6 +123,7 @@ interface PlanPhaseInput {
   complexity: "simple" | "medium" | "complex";
   onEvent: (event: HarnessEvent) => void;
   mcpConfigPath?: string;
+  config: ClawEngineConfig;
 }
 
 /** Pick the claude model for planning based on task complexity. */
@@ -138,6 +141,7 @@ export async function planPhase({
   complexity,
   onEvent,
   mcpConfigPath,
+  config,
 }: PlanPhaseInput): Promise<string> {
   const start = Date.now();
   onEvent({ type: "phase_start", phase: "plan", attempt: 1 });
@@ -163,6 +167,7 @@ export async function planPhase({
     claudeBin,
     workspacePath: repoPath,
     mcpConfigPath,
+    cachePrompt: config.providers?.anthropic?.cache_prompt ?? true,
   });
 
   for await (const event of stream) {
@@ -246,6 +251,7 @@ interface ValidatePhaseInput {
   onEvent: (event: HarnessEvent) => void;
   execCommand?: ExecCommandFn;
   attempt?: number;
+  parallel?: boolean;
 }
 
 export async function validatePhase({
@@ -254,6 +260,7 @@ export async function validatePhase({
   onEvent,
   execCommand,
   attempt = 1,
+  parallel = false,
 }: ValidatePhaseInput): Promise<ValidationResult> {
   const start = Date.now();
   onEvent({ type: "phase_start", phase: "validate", attempt });
@@ -278,6 +285,7 @@ export async function validatePhase({
     workspacePath: repoPath,
     steps: validationSteps,
     execCommand: exec,
+    parallel,
   });
 
   onEvent({
@@ -307,6 +315,7 @@ interface ReviewPhaseInput {
   getDiff?: () => Promise<string>;
   mcpConfigPath?: string;
   specPath?: string;
+  config: ClawEngineConfig;
 }
 
 export async function reviewPhase({
@@ -317,6 +326,7 @@ export async function reviewPhase({
   getDiff,
   mcpConfigPath,
   specPath,
+  config,
 }: ReviewPhaseInput): Promise<string> {
   const start = Date.now();
   onEvent({ type: "phase_start", phase: "review", attempt: 1 });
@@ -369,6 +379,7 @@ export async function reviewPhase({
     claudeBin,
     workspacePath: repoPath,
     mcpConfigPath,
+    cachePrompt: config.providers?.anthropic?.cache_prompt ?? true,
   });
 
   for await (const event of stream) {
@@ -507,7 +518,11 @@ export async function runPipeline(
     githubBotUserId,
     defaultBranch: defaultBranchOverride,
   } = input;
-  const validationSteps = config.validation.typescript;
+  // Select validation group based on available steps
+  const validationGroup = (input.config.validation.typescript?.steps || []).length > 0
+    ? input.config.validation.typescript
+    : input.config.validation.python;
+  const validationSteps = validationGroup.steps;
   const maxReviewRetries = input.maxReviewRetries ?? 1;
 
   // ── GitHub App auth ───────────────────────────────────────────────────────
@@ -554,162 +569,176 @@ export async function runPipeline(
     complexity: input.complexity ?? "medium",
     onEvent,
     mcpConfigPath,
+    config: input.config,
   });
 
-  let validation: ValidationResult = { passed: false, steps: [] };
-  let previousError: string | undefined;
-  let executeSuccess = false;
+  // Create a snapshot before entering the EXECUTE-VALIDATE retry loop
+  const snapshotRef = createSnapshot({ repoPath });
 
-  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-    await executePhase({
-      repoPath,
-      prompt,
-      plan,
-      previousError,
-      opencodeBin,
-      opencodeModel,
-      onEvent,
-      attempt,
-    });
-    validation = await validatePhase({
-      repoPath,
-      validationSteps,
-      onEvent,
-      execCommand: input.execCommand,
-      attempt,
-    });
+  try {
+    let validation: ValidationResult = { passed: false, steps: [] };
+    let previousError: string | undefined;
+    let executeSuccess = false;
 
-    if (validation.passed) {
-      executeSuccess = true;
-      break;
-    }
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      await executePhase({
+        repoPath,
+        prompt,
+        plan,
+        previousError,
+        opencodeBin,
+        opencodeModel,
+        onEvent,
+        attempt,
+      });
+      validation = await validatePhase({
+        repoPath,
+        validationSteps,
+        onEvent,
+        execCommand: input.execCommand,
+        attempt,
+        parallel: validationGroup.parallel,
+      });
 
-    const failedSteps = validation.steps.filter((s) => !s.passed);
-    previousError = failedSteps
-      .map((s) => `${s.name}: ${s.output}`)
-      .join("\n\n");
+      if (validation.passed) {
+        executeSuccess = true;
+        break;
+      }
 
-    if (attempt <= maxRetries) {
-      console.log(
-        `[pipeline] VALIDATE failed (attempt ${attempt}/${maxRetries + 1}), retrying EXECUTE...`,
+      previousError = compressValidationErrors(
+        validation.steps,
+        config.validation.max_error_context_chars
       );
-    }
-  }
 
-  if (!executeSuccess) {
-    return {
-      plan,
-      executeSuccess: false,
-      validation,
-      review: "",
-      prUrl: null,
-      reviewPassed: false,
-    };
-  }
-
-  let review = "";
-  let prUrl: string | null = null;
-  let reviewPassed = false;
-  let reviewAttempt = 0;
-  const executeAttemptOffset = maxRetries + 1; // continue numbering from where validate left off
-
-  while (reviewAttempt <= maxReviewRetries) {
-    reviewAttempt++;
-
-    review = await reviewPhase({
-      repoPath,
-      prompt,
-      claudeBin,
-      onEvent,
-      getDiff: input.getDiff,
-      mcpConfigPath,
-      specPath: input.specPath,
-    });
-
-    const verdict = parseReviewVerdict(review);
-
-    if (verdict === "APPROVE" || reviewAttempt > maxReviewRetries) {
-      reviewPassed = verdict === "APPROVE";
-      break;
+      if (attempt <= maxRetries) {
+        // Restore snapshot before retrying execute on validation failure
+        restoreSnapshot({ repoPath, ref: snapshotRef });
+        console.log(
+          `[pipeline] VALIDATE failed (attempt ${attempt}/${maxRetries + 1}), retrying EXECUTE...`,
+        );
+      }
     }
 
-    // REQUEST_CHANGES — loop back: execute to fix, then validate
-    console.log(
-      `[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`,
-    );
-
-    await executePhase({
-      repoPath,
-      prompt,
-      plan,
-      previousError: `Code review requested changes:\n${review}`,
-      opencodeBin,
-      opencodeModel,
-      onEvent,
-      attempt: executeAttemptOffset + reviewAttempt,
-    });
-
-    const fixValidation = await validatePhase({
-      repoPath,
-      validationSteps,
-      onEvent,
-      execCommand: input.execCommand,
-      attempt: executeAttemptOffset + reviewAttempt,
-    });
-
-    if (!fixValidation.passed) {
-      // Validation failed after review fix — abort
+    if (!executeSuccess) {
       return {
         plan,
         executeSuccess: false,
-        validation: fixValidation,
-        review,
+        validation,
+        review: "",
         prUrl: null,
         reviewPassed: false,
       };
     }
-  }
 
-  // Commit, push, PR
-  let prBranch: string | undefined;
-  if (openPr) {
-    try {
-      prBranch = gitCommitAndPush(repoPath, prompt);
-    } catch (err: any) {
-      if (err.message.includes("nothing to commit")) {
-        console.log("[pipeline] nothing to commit, skipping PR");
+    let review = "";
+    let prUrl: string | null = null;
+    let reviewPassed = false;
+    let reviewAttempt = 0;
+    const executeAttemptOffset = maxRetries + 1; // continue numbering from where validate left off
+
+    while (reviewAttempt <= maxReviewRetries) {
+      reviewAttempt++;
+
+      review = await reviewPhase({
+        repoPath,
+        prompt,
+        claudeBin,
+        onEvent,
+        getDiff: input.getDiff,
+        mcpConfigPath,
+        specPath: input.specPath,
+        config: input.config,
+      });
+
+      const verdict = parseReviewVerdict(review);
+
+      if (verdict === "APPROVE" || reviewAttempt > maxReviewRetries) {
+        reviewPassed = verdict === "APPROVE";
+        break;
+      }
+
+      // REQUEST_CHANGES — restore snapshot before fix attempt
+      restoreSnapshot({ repoPath, ref: snapshotRef });
+      console.log(
+        `[pipeline] REVIEW requested changes (attempt ${reviewAttempt}/${maxReviewRetries + 1}), fixing...`,
+      );
+
+      await executePhase({
+        repoPath,
+        prompt,
+        plan,
+        previousError: `Code review requested changes:\n${review}`,
+        opencodeBin,
+        opencodeModel,
+        onEvent,
+        attempt: executeAttemptOffset + reviewAttempt,
+      });
+
+      const fixValidation = await validatePhase({
+        repoPath,
+        validationSteps,
+        onEvent,
+        execCommand: input.execCommand,
+        attempt: executeAttemptOffset + reviewAttempt,
+        parallel: validationGroup.parallel,
+      });
+
+      if (!fixValidation.passed) {
         return {
           plan,
-          executeSuccess: true,
-          validation,
+          executeSuccess: false,
+          validation: fixValidation,
           review,
           prUrl: null,
-          reviewPassed,
+          reviewPassed: false,
         };
       }
-      throw new Error(`Failed to commit/push for PR: ${err.message}`);
     }
+
+    // Commit, push, PR
+    let prBranch: string | undefined;
+    if (openPr) {
+      try {
+        prBranch = gitCommitAndPush(repoPath, prompt);
+      } catch (err: any) {
+        if (err.message.includes("nothing to commit")) {
+          console.log("[pipeline] nothing to commit, skipping PR");
+          return {
+            plan,
+            executeSuccess: true,
+            validation,
+            review,
+            prUrl: null,
+            reviewPassed,
+          };
+        }
+        throw new Error(`Failed to commit/push for PR: ${err.message}`);
+      }
+    }
+
+    const prBase = defaultBranchOverride ?? resolveDefaultBranch(repoPath);
+
+    prUrl = await prPhase({
+      repoPath,
+      prompt,
+      review,
+      onEvent,
+      openPr,
+      execGh: prExecGh,
+      branch: prBranch,
+      baseBranch: prBase,
+    });
+
+    return {
+      plan,
+      executeSuccess: true,
+      validation,
+      review,
+      prUrl,
+      reviewPassed,
+    };
+  } finally {
+    // Ensure snapshot is cleaned up in case of any exceptions
+    cleanupSnapshot({ repoPath, ref: snapshotRef });
   }
-
-  const prBase = defaultBranchOverride ?? resolveDefaultBranch(repoPath);
-
-  prUrl = await prPhase({
-    repoPath,
-    prompt,
-    review,
-    onEvent,
-    openPr,
-    execGh: prExecGh,
-    branch: prBranch,
-    baseBranch: prBase,
-  });
-
-  return {
-    plan,
-    executeSuccess: true,
-    validation,
-    review,
-    prUrl,
-    reviewPassed,
-  };
 }

@@ -128,6 +128,7 @@ export interface ClaudePipeOptions {
   resumeId?: string;
   /** Path to a JSON file with MCP server definitions. Passed as --mcp-config. */
   mcpConfigPath?: string;
+  cachePrompt?: boolean;
 }
 
 /**
@@ -158,6 +159,7 @@ export async function* runClaudePipe(
   }
   if (opts.resumeId) args.push("--resume", opts.resumeId);
   if (opts.mcpConfigPath) args.push("--mcp-config", opts.mcpConfigPath);
+  if (opts.cachePrompt) args.push("--cache-prompt");
 
   const proc = spawn(claudeBin, args, {
     cwd: workspacePath,

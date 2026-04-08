@@ -45,20 +45,26 @@ providers:
     estimated_daily_limit: 500000
     warning_percent: 0.70
     force_qwen_percent: 0.85
+    cache_prompt: true
   opencode:
     binary: "opencode"
     default_model: "dashscope/qwen3-coder-plus"
 
 validation:
   max_retries: 2
+  max_error_context_chars: 2000
   typescript:
-    - { name: "typecheck", command: "npx tsc --noEmit", required: true, retryable: true }
-    - { name: "lint", command: "npm run lint", required: false, retryable: true }
-    - { name: "test", command: "npm test", required: true, retryable: true }
+    parallel: true
+    steps:
+      - { name: "typecheck", command: "npx tsc --noEmit", required: true, retryable: true }
+      - { name: "lint", command: "npm run lint", required: false, retryable: true }
+      - { name: "test", command: "npm test", required: true, retryable: true }
   python:
-    - { name: "typecheck", command: "mypy .", required: false, retryable: true }
-    - { name: "lint", command: "ruff check .", required: false, retryable: true }
-    - { name: "test", command: "pytest", required: true, retryable: true }
+    parallel: false
+    steps:
+      - { name: "typecheck", command: "mypy .", required: false, retryable: true }
+      - { name: "lint", command: "ruff check .", required: false, retryable: true }
+      - { name: "test", command: "pytest", required: true, retryable: true }
 
 mcp:
   inherit_from: "~/.claude/settings.json"
