@@ -7,6 +7,12 @@ import type {
 
 // ── Module-level mocks (hoisted) ─────────────────────────────────────────────
 
+vi.mock("../../../src/core/snapshot.js", () => ({
+  createSnapshot: vi.fn(() => "claw-snapshot-12345"),
+  restoreSnapshot: vi.fn(),
+  cleanupSnapshot: vi.fn(),
+}));
+
 vi.mock("../../../src/integrations/claude-p/claude-pipe.js", () => ({
   runClaudePipe: vi.fn(async function* () {
     yield { type: "text_delta", text: "## Plan\n1. Do X\n2. Do Y" };
@@ -21,8 +27,13 @@ vi.mock("../../../src/integrations/opencode/opencode-pipe.js", () => ({
   }),
 }));
 
+vi.mock("../../../src/core/validation-runner.js", () => ({
+  runValidation: vi.fn(),
+}));
+
 import { runClaudePipe } from "../../../src/integrations/claude-p/claude-pipe.js";
 import { runOpencodePipe } from "../../../src/integrations/opencode/opencode-pipe.js";
+import { runValidation } from "../../../src/core/validation-runner.js";
 import {
   planPhase,
   executePhase,
@@ -31,22 +42,35 @@ import {
   prPhase,
   runPipeline,
 } from "../../../src/core/pipeline.js";
+import { createSnapshot, restoreSnapshot, cleanupSnapshot } from "../../../src/core/snapshot.js";
 
 // ── Test config ──────────────────────────────────────────────────────────────
 
 const testConfig = {
   validation: {
-    typescript: [
-      {
-        name: "typecheck",
-        command: "npx tsc --noEmit",
-        required: true,
-        retryable: true,
-      },
-    ],
+    typescript: {
+      parallel: false,
+      steps: [
+        {
+          name: "typecheck",
+          command: "npx tsc --noEmit",
+          required: true,
+          retryable: true,
+        },
+      ]
+    },
+    python: {
+      parallel: false,
+      steps: []
+    },
     max_retries: 2,
-    python: [],
+    max_error_context_chars: 2000,
   },
+  providers: {
+    anthropic: {
+      cache_prompt: true,
+    }
+  }
 } as any;
 
 // ── Reset mocks between tests ────────────────────────────────────────────────
@@ -59,6 +83,23 @@ beforeEach(() => {
   vi.mocked(runOpencodePipe).mockImplementation(async function* () {
     yield { type: "text_delta", text: "implementing..." };
     yield { type: "session_end", reason: "completed" };
+  });
+  (runValidation as any).mockImplementation(async ({ execCommand, steps }) => {
+    // Simulate the actual validation logic by calling the execCommand for each step
+    const results = await Promise.all(steps.map(async (step) => {
+      const result = await execCommand(step.command, "/tmp/repo");
+      return {
+        name: step.name,
+        passed: result.exitCode === 0,
+        output: result.stdout,
+        durationMs: 100,
+      };
+    }));
+    
+    // Determine if overall validation passed based on required steps
+    const passed = results.every(r => r.passed || !steps.find(s => s.name === r.name)?.required);
+    
+    return { passed, steps: results };
   });
 });
 
@@ -94,7 +135,7 @@ describe("pipeline types", () => {
     const ctx: PipelineContext = {
       repoPath: "/tmp/repo",
       prompt: "add feature X",
-      config: {} as any,
+      config: testConfig,
       claudeBin: "claude",
       opencodeBin: "opencode",
       opencodeModel: "dashscope/qwen3-coder-plus",
@@ -128,7 +169,9 @@ describe("planPhase", () => {
       repoPath: "/tmp/repo",
       prompt: "add feature X",
       claudeBin: "claude",
+      complexity: "simple",
       onEvent: (e) => events.push(e),
+      config: testConfig,
     });
     expect(plan).toContain("## Plan");
     expect(plan).toContain("Do X");
@@ -140,7 +183,9 @@ describe("planPhase", () => {
       repoPath: "/tmp/repo",
       prompt: "add feature X",
       claudeBin: "claude",
+      complexity: "simple",
       onEvent: (e) => events.push(e),
+      config: testConfig,
     });
     expect(
       events.some((e) => e.type === "phase_start" && e.phase === "plan"),
@@ -161,7 +206,9 @@ describe("planPhase", () => {
         repoPath: "/tmp/repo",
         prompt: "x",
         claudeBin: "claude",
+        complexity: "simple",
         onEvent: () => {},
+        config: testConfig,
       }),
     ).rejects.toThrow();
   });
@@ -228,6 +275,25 @@ describe("executePhase", () => {
 // ── validatePhase ────────────────────────────────────────────────────────────
 
 describe("validatePhase", () => {
+  beforeEach(() => {
+    // Override the global mock for validatePhase tests to use real runValidation behavior
+    (runValidation as any).mockImplementation(async ({ steps, execCommand }) => {
+      const results = await Promise.all(steps.map(async (step) => {
+        const { stdout, exitCode } = await execCommand!(step.command, "/tmp/repo");
+        return {
+          name: step.name,
+          passed: exitCode === 0,
+          output: stdout,
+          durationMs: 100,
+        };
+      }));
+      
+      const passed = results.every(r => r.passed || !steps.find(s => s.name === r.name)?.required);
+      
+      return { passed, steps: results };
+    });
+  });
+
   it("returns validation result from runValidation", async () => {
     const result = await validatePhase({
       repoPath: "/tmp/repo",
@@ -244,6 +310,7 @@ describe("validatePhase", () => {
     });
     expect(result.passed).toBe(true);
     expect(result.steps).toHaveLength(1);
+    expect(result.steps[0].passed).toBe(true);
   });
 
   it("returns failed result when required step fails", async () => {
@@ -294,6 +361,7 @@ describe("reviewPhase", () => {
       claudeBin: "claude",
       onEvent: () => {},
       getDiff: async () => "diff --git a/file.ts\n+new code",
+      config: testConfig,
     });
     expect(review).toContain("LGTM");
     expect(capturedOpts.prompt).toContain("diff --git");
@@ -311,6 +379,7 @@ describe("reviewPhase", () => {
       claudeBin: "claude",
       onEvent: (e) => events.push(e),
       getDiff: async () => "diff",
+      config: testConfig,
     });
     expect(
       events.some((e) => e.type === "phase_start" && e.phase === "review"),
@@ -447,8 +516,137 @@ describe("runPipeline", () => {
       onEvent: () => {},
       execCommand: async () => ({ stdout: "always fails", exitCode: 1 }),
       getDiff: async () => "diff",
+      complexity: "simple",
     });
     expect(result.validation.passed).toBe(false);
     expect(result.executeSuccess).toBe(false);
+  });
+});
+
+
+
+describe("snapshot integration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks(); // Clear any previous call counts
+    vi.mocked(createSnapshot).mockReturnValue("claw-snapshot-12345");
+    vi.mocked(restoreSnapshot).mockImplementation(() => {});
+    vi.mocked(cleanupSnapshot).mockImplementation(() => {});
+  });
+
+  it("creates snapshot before EXECUTE-VALIDATE loop", async () => {
+    vi.mocked(runClaudePipe).mockImplementation(async function* () {
+      yield { type: "text_delta", text: "plan text" };
+      yield { type: "session_end", reason: "completed" };
+    });
+    (runValidation as any).mockResolvedValue({ passed: true, steps: [] });
+
+    await runPipeline({
+      repoPath: "/tmp/repo",
+      prompt: "add feature X",
+      config: testConfig,
+      claudeBin: "claude",
+      opencodeBin: "opencode",
+      opencodeModel: "qwen3-coder-plus",
+      maxRetries: 2,
+      openPr: false,
+      onEvent: () => {},
+      execCommand: async () => ({ stdout: "ok", exitCode: 0 }),
+      getDiff: async () => "diff",
+      complexity: "simple",
+    });
+
+    expect(createSnapshot).toHaveBeenCalledWith({ repoPath: "/tmp/repo" });
+  });
+
+  it("calls restoreSnapshot between execute attempts when validation fails", async () => {
+    vi.mocked(runClaudePipe).mockImplementation(async function* () {
+      yield { type: "text_delta", text: "plan text" };
+      yield { type: "session_end", reason: "completed" };
+    });
+    // Mock validation to fail on first call and pass on second call
+    let callCount = 0;
+    (runValidation as any).mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve({ passed: false, steps: [{ name: "typecheck", passed: false, output: "error", durationMs: 100 }] });
+      }
+      return Promise.resolve({ passed: true, steps: [] });
+    });
+
+    await runPipeline({
+      repoPath: "/tmp/repo",
+      prompt: "add feature X",
+      config: testConfig,
+      claudeBin: "claude",
+      opencodeBin: "opencode",
+      opencodeModel: "qwen3-coder-plus",
+      maxRetries: 2,
+      openPr: false,
+      onEvent: () => {},
+      execCommand: async () => ({ stdout: "ok", exitCode: 0 }),
+      getDiff: async () => "diff",
+      complexity: "simple",
+    });
+
+    expect(restoreSnapshot).toHaveBeenCalledWith({
+      repoPath: "/tmp/repo",
+      ref: "claw-snapshot-12345"
+    });
+  });
+
+  it("calls cleanupSnapshot on success", async () => {
+    vi.mocked(runClaudePipe).mockImplementation(async function* () {
+      yield { type: "text_delta", text: "plan text" };
+      yield { type: "session_end", reason: "completed" };
+    });
+    (runValidation as any).mockResolvedValue({ passed: true, steps: [] });
+
+    await runPipeline({
+      repoPath: "/tmp/repo",
+      prompt: "add feature X",
+      config: testConfig,
+      claudeBin: "claude",
+      opencodeBin: "opencode",
+      opencodeModel: "qwen3-coder-plus",
+      maxRetries: 2,
+      openPr: false,
+      onEvent: () => {},
+      execCommand: async () => ({ stdout: "ok", exitCode: 0 }),
+      getDiff: async () => "diff",
+      complexity: "simple",
+    });
+
+    expect(cleanupSnapshot).toHaveBeenCalledWith({
+      repoPath: "/tmp/repo",
+      ref: "claw-snapshot-12345"
+    });
+  });
+
+  it("calls cleanupSnapshot on final failure", async () => {
+    vi.mocked(runClaudePipe).mockImplementation(async function* () {
+      yield { type: "text_delta", text: "plan text" };
+      yield { type: "session_end", reason: "completed" };
+    });
+    (runValidation as any).mockResolvedValue({ passed: false, steps: [] });
+
+    await runPipeline({
+      repoPath: "/tmp/repo",
+      prompt: "add feature X",
+      config: testConfig,
+      claudeBin: "claude",
+      opencodeBin: "opencode",
+      opencodeModel: "qwen3-coder-plus",
+      maxRetries: 0, // No retries, just initial attempt
+      openPr: false,
+      onEvent: () => {},
+      execCommand: async () => ({ stdout: "fail", exitCode: 1 }),
+      getDiff: async () => "diff",
+      complexity: "simple",
+    });
+
+    expect(cleanupSnapshot).toHaveBeenCalledWith({
+      repoPath: "/tmp/repo",
+      ref: "claw-snapshot-12345"
+    });
   });
 });

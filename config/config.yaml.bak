@@ -52,7 +52,6 @@ providers:
 
 validation:
   max_retries: 2
-  max_error_context_chars: 2000
   typescript:
     parallel: true
     steps:

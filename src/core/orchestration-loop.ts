@@ -231,8 +231,9 @@ export async function orchestrateTask(
       while (true) {
         const result = await runValidation({
           workspacePath: wtp,
-          steps: ctx.config.validation.typescript,
+          steps: ctx.config.validation.typescript.steps,
           execCommand,
+          parallel: ctx.config.validation.typescript.parallel,
         });
 
         await ctx.db

@@ -25,6 +25,11 @@ const validationStepSchema = z.object({
   retryable: z.boolean(),
 });
 
+const validationGroupSchema = z.object({
+  parallel: z.boolean().default(false),
+  steps: z.array(validationStepSchema),
+});
+
 const mcpServerSchema = z.object({
   command: z.string(),
   args: z.array(z.string()).default([]),
@@ -98,6 +103,7 @@ export const configSchema = z.object({
       estimated_daily_limit: z.number().int().default(500_000),
       warning_percent: z.number().default(0.7),
       force_qwen_percent: z.number().default(0.85),
+      cache_prompt: z.boolean().default(true),
     }),
     opencode: z
       .object({
@@ -109,36 +115,43 @@ export const configSchema = z.object({
 
   validation: z.object({
     max_retries: z.number().int().default(2),
-    typescript: z.array(validationStepSchema).default([
-      {
-        name: "typecheck",
-        command: "npx tsc --noEmit",
-        required: true,
-        retryable: true,
-      },
-      {
-        name: "lint",
-        command: "npm run lint",
-        required: false,
-        retryable: true,
-      },
-      { name: "test", command: "npm test", required: true, retryable: true },
-    ]),
-    python: z.array(validationStepSchema).default([
-      {
-        name: "typecheck",
-        command: "mypy .",
-        required: false,
-        retryable: true,
-      },
-      {
-        name: "lint",
-        command: "ruff check .",
-        required: false,
-        retryable: true,
-      },
-      { name: "test", command: "pytest", required: true, retryable: true },
-    ]),
+    max_error_context_chars: z.number().int().default(2000),
+    typescript: validationGroupSchema.default({
+      parallel: false,
+      steps: [
+        {
+          name: "typecheck",
+          command: "npx tsc --noEmit",
+          required: true,
+          retryable: true,
+        },
+        {
+          name: "lint",
+          command: "npm run lint",
+          required: false,
+          retryable: true,
+        },
+        { name: "test", command: "npm test", required: true, retryable: true },
+      ],
+    }),
+    python: validationGroupSchema.default({
+      parallel: false,
+      steps: [
+        {
+          name: "typecheck",
+          command: "mypy .",
+          required: false,
+          retryable: true,
+        },
+        {
+          name: "lint",
+          command: "ruff check .",
+          required: false,
+          retryable: true,
+        },
+        { name: "test", command: "pytest", required: true, retryable: true },
+      ],
+    }),
   }),
 
   mcp: z
