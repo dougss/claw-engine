@@ -14,6 +14,7 @@ import { registerLogsRoutes } from "./api/routes/logs.js";
 import { registerSessionRoutes } from "./api/routes/sessions.js";
 import { registerStatsRoutes } from "./api/routes/stats.js";
 import { registerRunApiRoutes } from "./api/routes/run-api.js";
+import { registerSubmitApiRoutes } from "./api/routes/submit-api.js";
 import { handleSseConnection } from "./api/sse.js";
 
 export async function createServer(configPath?: string) {
@@ -47,6 +48,7 @@ export async function createServer(configPath?: string) {
       registerSessionRoutes(api, db);
       registerStatsRoutes(api, db);
       registerRunApiRoutes(api, db, redis);
+      registerSubmitApiRoutes(api, db);
 
       // Health check endpoint
       api.get("/health", async (_request, reply) => {

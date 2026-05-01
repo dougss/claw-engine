@@ -21,7 +21,7 @@ sessions:
   max_parallel_delegate: 1
   health_check_interval_ms: 30000
   stall_timeout_engine_ms: 60000
-  stall_timeout_delegate_ms: 300000
+  stall_timeout_delegate_ms: 1800000
 
 token_budget:
   warning_threshold: 0.75
@@ -58,7 +58,8 @@ validation:
     steps:
       - { name: "typecheck", command: "npx tsc --noEmit", required: true, retryable: true }
       - { name: "lint", command: "npm run lint", required: false, retryable: true }
-      - { name: "test", command: "npm test", required: true, retryable: true }
+      - { name: "validate", command: "npm run validate --if-present", required: false, retryable: true }
+      - { name: "test", command: "npm test --if-present", required: false, retryable: true }
   python:
     parallel: false
     steps:

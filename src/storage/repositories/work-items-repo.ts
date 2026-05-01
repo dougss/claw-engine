@@ -9,6 +9,7 @@ export interface CreateWorkItemInput {
   description?: string;
   repos: string[];
   source?: string;
+  sourceRef?: string;
   priority?: number;
 }
 
@@ -19,6 +20,7 @@ export async function createWorkItem(db: Db, input: CreateWorkItemInput) {
       title: input.title,
       description: input.description ?? null,
       source: input.source ?? "api",
+      sourceRef: input.sourceRef ?? null,
       dag: { repos: input.repos },
       status: "queued",
       priority: input.priority ?? 3,

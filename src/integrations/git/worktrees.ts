@@ -86,8 +86,16 @@ export async function createWorktree({
     });
   }
 
+  // Install dependencies — detect package manager from lockfile.
+  // Order matters: pnpm > yarn > npm (most projects ship one lockfile).
+  const hasPnpmLock = await exists(join(worktreePath, "pnpm-lock.yaml"));
+  const hasYarnLock = await exists(join(worktreePath, "yarn.lock"));
   const hasPackageLock = await exists(join(worktreePath, "package-lock.json"));
-  if (hasPackageLock) {
+  if (hasPnpmLock) {
+    await spawnAsync({ command: "pnpm", args: ["install", "--frozen-lockfile"], cwd: worktreePath });
+  } else if (hasYarnLock) {
+    await spawnAsync({ command: "yarn", args: ["install", "--frozen-lockfile"], cwd: worktreePath });
+  } else if (hasPackageLock) {
     await spawnAsync({ command: "npm", args: ["ci"], cwd: worktreePath });
   }
 
