@@ -21,6 +21,12 @@ interface SubmitRequestBody {
   model?: string;
   forceNew?: boolean;
   branch?: string;
+  /**
+   * Optional URL to POST when the work item reaches a terminal status.
+   * Fire-and-forget. Caller's bridge can use this to close the loop without
+   * holding an SSE follow open.
+   */
+  completionWebhook?: string;
 }
 
 /**
@@ -86,12 +92,18 @@ export function registerSubmitApiRoutes(app: FastifyInstance, db: Db): void {
 
     const config = loadConfig();
 
+    const completionWebhook =
+      typeof body.completionWebhook === "string" && body.completionWebhook.trim()
+        ? body.completionWebhook.trim()
+        : undefined;
+
     const wi = await createWorkItem(db, {
       title: description.slice(0, 200),
       description,
       repos,
       source,
       sourceRef: sourceRef ?? undefined,
+      completionWebhook,
     });
 
     let complexity: "simple" | "medium" | "complex" = "medium";

@@ -11,6 +11,7 @@ export interface CreateWorkItemInput {
   source?: string;
   sourceRef?: string;
   priority?: number;
+  completionWebhook?: string;
 }
 
 export async function createWorkItem(db: Db, input: CreateWorkItemInput) {
@@ -24,6 +25,7 @@ export async function createWorkItem(db: Db, input: CreateWorkItemInput) {
       dag: { repos: input.repos },
       status: "queued",
       priority: input.priority ?? 3,
+      completionWebhook: input.completionWebhook ?? null,
     })
     .returning();
   return result;

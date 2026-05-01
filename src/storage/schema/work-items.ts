@@ -40,6 +40,13 @@ export const workItems = pgTable(
       .defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    /**
+     * Optional URL the orchestration loop POSTs to when this work item reaches
+     * a terminal status (completed | failed). Fire-and-forget; failure does
+     * not block the run. Used by external orchestrators (e.g. dev-squad-bridge)
+     * to close the loop without holding an SSE follow connection open.
+     */
+    completionWebhook: text("completion_webhook"),
   },
   (table) => [
     index("idx_work_items_status").on(table.status),

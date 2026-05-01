@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import type { Redis } from "ioredis";
 import type { ClawEngineConfig } from "../config-schema.js";
 import type { getDb } from "../storage/db.js";
-import { tasks } from "../storage/schema/index.js";
+import { tasks, workItems } from "../storage/schema/index.js";
 import {
   createWorktree,
   removeWorktree,
@@ -62,6 +62,72 @@ async function pathExists(p: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Fires the completion webhook (if configured on the work item).
+ *
+ * Fire-and-forget: any failure is swallowed and logged. The webhook is the
+ * orchestrator's preferred channel for closing the loop without holding an
+ * SSE connection open. Replaces SSE-follow at the consumer side.
+ *
+ * Payload shape matches dev-squad-bridge's /webhook/claw-completed expectation:
+ * { taskId, workItemId, sourceRef (issueId), status, prUrl?, branch?, costUsd?, error? }
+ */
+async function fireCompletionWebhook(
+  ctx: OrchestrationContext,
+  payload: {
+    status: "completed" | "failed";
+    prUrl?: string;
+    branch?: string;
+    costUsd?: number;
+    error?: string;
+  },
+): Promise<void> {
+  try {
+    const [wi] = await ctx.db
+      .select({
+        completionWebhook: workItems.completionWebhook,
+        sourceRef: workItems.sourceRef,
+      })
+      .from(workItems)
+      .where(eq(workItems.id, ctx.workItemId));
+
+    const url = wi?.completionWebhook;
+    if (!url) return;
+
+    const body = JSON.stringify({
+      taskId: ctx.taskId,
+      workItemId: ctx.workItemId,
+      issueId: wi?.sourceRef ?? null,
+      sourceRef: wi?.sourceRef ?? null,
+      status: payload.status,
+      prUrl: payload.prUrl,
+      branch: payload.branch ?? ctx.branch,
+      costUsd: payload.costUsd,
+      error: payload.error,
+    });
+
+    // Use built-in fetch (Node 22) so we don't add a dep here. 5s timeout —
+    // the webhook is best-effort; never block orchestration on the consumer.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    console.warn(
+      "[orchestration] completion webhook failed (non-fatal):",
+      err instanceof Error ? err.message : err,
+    );
   }
 }
 
@@ -373,6 +439,13 @@ export async function orchestrateTask(
       data: { taskId: ctx.taskId, reason: "completed" },
     }).catch(() => {});
 
+    // ── Step 9b: Fire completion webhook (if configured on the work item) ────
+    void fireCompletionWebhook(ctx, {
+      status: "completed",
+      prUrl,
+      branch: ctx.branch,
+    });
+
     // ── Step 10: Notify via Telegram (fire-and-forget — must not block cleanup) ─
     void Promise.resolve(
       sendAlert({
@@ -415,6 +488,12 @@ export async function orchestrateTask(
       type: "session_end",
       data: { taskId: ctx.taskId, reason: "error" },
     }).catch(() => {});
+
+    void fireCompletionWebhook(ctx, {
+      status: "failed",
+      error: errorMsg,
+      branch: ctx.branch,
+    });
 
     void Promise.resolve(
       sendAlert({
