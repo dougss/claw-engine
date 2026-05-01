@@ -225,6 +225,33 @@ export async function orchestrateTask(
     // Local const so closures below see a non-nullable string
     const wtp = wt.worktreePath;
 
+    // ── Step 2b: Force commit identity to the bot ─────────────────────────────
+    // Without this, commits inherit the upstream repo's local user config (e.g.
+    // dougss/deck has user.name=openhands hardcoded), and the delegate's
+    // commits + claw's "claw: ..." commits get attributed to the wrong author.
+    // Setting it on the worktree affects the worktree only.
+    try {
+      const botEmail = process.env.CLAW_GITHUB_BOT_USER_ID
+        ? `${process.env.CLAW_GITHUB_BOT_USER_ID}+clawengine[bot]@users.noreply.github.com`
+        : "clawengine[bot]@users.noreply.github.com";
+      await new Promise<void>((resolve) => {
+        execFileCb(
+          "git",
+          ["-C", wtp, "config", "user.name", "Claw Engine"],
+          () => resolve(),
+        );
+      });
+      await new Promise<void>((resolve) => {
+        execFileCb(
+          "git",
+          ["-C", wtp, "config", "user.email", botEmail],
+          () => resolve(),
+        );
+      });
+    } catch {
+      // Non-fatal — worst case commits show wrong author, run still succeeds
+    }
+
     // ── Step 3: Load context ──────────────────────────────────────────────────
     // Verifies workspace is accessible; delegate reads CLAUDE.md on its own
     await loadProjectContext(wtp).catch(() => "");
