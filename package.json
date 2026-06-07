@@ -32,7 +32,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/ripgrep": "^1.15.14",
     "bullmq": "^5.73.0",
-    "commander": "^13.1.0",
+    "commander": "^14.0.3",
     "drizzle-orm": "^0.39.3",
     "fast-glob": "^3.3.3",
     "fastify": "^5.8.4",
